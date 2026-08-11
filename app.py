@@ -1,51 +1,302 @@
 import os
 import uuid
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+
+from flask import (
+    Flask,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    flash,
+    session,
+    jsonify,
+)
 from dotenv import load_dotenv
+
 from services.supabase_service import public_client, admin_client
 from services.auth_service import login_required, role_required, current_profile
 from services.dtr_service import parse_csv, evaluate_day
 from services.payroll_service import calculate
-from services.rag_service import assess_complaint
+
+# If your Hugging Face rag_service.py already exists,
+# this import will use it.
+try:
+    from services.rag_service import assess_complaint
+except Exception as e:
+    print("RAG IMPORT ERROR:", repr(e))
+    assess_complaint = None
+
+
+# ---------------------------------------------------------
+# APP SETUP
+# ---------------------------------------------------------
 
 load_dotenv()
+
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")
+
+app.secret_key = os.getenv(
+    "FLASK_SECRET_KEY",
+    "dev-only-change-this-secret-key"
+)
+
+
+# ---------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------
 
 @app.context_processor
 def inject_profile():
-    return {"current_profile": current_profile() if session.get("user_id") else None}
+    try:
+        profile = current_profile() if session.get("user_id") else None
+    except Exception:
+        profile = None
 
-@app.get("/health")
+    return {
+        "current_profile": profile
+    }
+
+
+@app.route("/health")
 def health():
-    return {"ok": True}
+    return jsonify({
+        "status": "success",
+        "app": "Payroll System",
+        "message": "Flask application is running."
+    })
 
-@app.route("/", methods=["GET"])
+
+@app.route("/test-db")
+def test_db():
+    """
+    Tests the connection between:
+    Vercel -> Flask -> Supabase database
+    """
+
+    try:
+        db = admin_client()
+
+        result = (
+            db.table("profiles")
+            .select("id")
+            .limit(1)
+            .execute()
+        )
+
+        return jsonify({
+            "status": "success",
+            "database": "connected",
+            "message": "Supabase database connection is working."
+        }), 200
+
+    except Exception as e:
+        print("DATABASE TEST ERROR:", repr(e))
+
+        return jsonify({
+            "status": "error",
+            "database": "not connected",
+            "error": str(e)
+        }), 500
+
+
+@app.route("/test-env")
+def test_env():
+    """
+    Shows only whether variables exist.
+    DOES NOT reveal secret values.
+    """
+
+    return jsonify({
+        "SUPABASE_URL": bool(os.getenv("SUPABASE_URL")),
+        "SUPABASE_ANON_KEY": bool(os.getenv("SUPABASE_ANON_KEY")),
+        "SUPABASE_SERVICE_ROLE_KEY": bool(
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        ),
+        "FLASK_SECRET_KEY": bool(os.getenv("FLASK_SECRET_KEY")),
+        "HF_TOKEN": bool(os.getenv("HF_TOKEN")),
+    })
+
+
+# ---------------------------------------------------------
+# HOME
+# ---------------------------------------------------------
+
+@app.route("/")
 def index():
-    return redirect(url_for("dashboard" if session.get("user_id") else "login"))
+
+    if session.get("user_id"):
+        return redirect(url_for("dashboard"))
+
+    return redirect(url_for("login"))
+
+
+# ---------------------------------------------------------
+# LOGIN
+# ---------------------------------------------------------
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+
     if request.method == "POST":
+
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+
+        if not email or not password:
+            flash(
+                "Please enter your email and password.",
+                "danger"
+            )
+            return render_template("login.html")
+
         try:
-            res = public_client().auth.sign_in_with_password({"email": request.form["email"], "password": request.form["password"]})
-            session["user_id"] = str(res.user.id)
-            session["email"] = res.user.email
+
+            result = public_client().auth.sign_in_with_password({
+                "email": email,
+                "password": password
+            })
+
+            if not result.user:
+                flash(
+                    "Login failed.",
+                    "danger"
+                )
+                return render_template("login.html")
+
+            user_id = str(result.user.id)
+
+            # Check profile
+            db = admin_client()
+
+            profiles = (
+                db.table("profiles")
+                .select("*")
+                .eq("id", user_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+
+            if not profiles:
+
+                flash(
+                    "Your account exists, but no profile was found.",
+                    "danger"
+                )
+
+                return render_template("login.html")
+
+            profile = profiles[0]
+
+            # Optional approval system
+            if not profile.get("approved", False):
+
+                flash(
+                    "Your account is waiting for Super Admin approval.",
+                    "warning"
+                )
+
+                return render_template("login.html")
+
+            session.clear()
+
+            session["user_id"] = user_id
+            session["email"] = result.user.email
+            session["role"] = profile.get("role")
+
+            flash(
+                "Login successful.",
+                "success"
+            )
+
             return redirect(url_for("dashboard"))
+
         except Exception as e:
-            flash("Invalid login or Supabase authentication error.", "danger")
+
+            print("LOGIN ERROR:", repr(e))
+
+            flash(
+                f"Login error: {str(e)}",
+                "danger"
+            )
+
     return render_template("login.html")
+
+
+# ---------------------------------------------------------
+# REGISTER
+# ---------------------------------------------------------
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if request.method == "POST":
-        try:
-            email = request.form["email"].strip()
-            password = request.form["password"]
-            full_name = request.form.get("full_name", "").strip()
 
-            response = public_client().auth.sign_up({
+    if request.method == "POST":
+
+        full_name = request.form.get(
+            "full_name",
+            ""
+        ).strip()
+
+        email = request.form.get(
+            "email",
+            ""
+        ).strip()
+
+        password = request.form.get(
+            "password",
+            ""
+        )
+
+        # Basic validation
+
+        if not full_name:
+
+            flash(
+                "Please enter your full name.",
+                "danger"
+            )
+
+            return render_template("register.html")
+
+        if not email:
+
+            flash(
+                "Please enter your email.",
+                "danger"
+            )
+
+            return render_template("register.html")
+
+        if not password:
+
+            flash(
+                "Please enter a password.",
+                "danger"
+            )
+
+            return render_template("register.html")
+
+        if len(password) < 6:
+
+            flash(
+                "Password must contain at least 6 characters.",
+                "danger"
+            )
+
+            return render_template("register.html")
+
+        try:
+
+            print(
+                "REGISTER ATTEMPT:",
+                email
+            )
+
+            supabase = public_client()
+
+            result = supabase.auth.sign_up({
                 "email": email,
                 "password": password,
                 "options": {
@@ -55,134 +306,1323 @@ def register():
                 }
             })
 
-            print("REGISTER SUCCESS:", response)
+            print(
+                "REGISTER RESULT:",
+                result
+            )
+
+            if result.user:
+
+                user_id = str(
+                    result.user.id
+                )
+
+                # The database trigger should automatically
+                # create the profile row.
+                #
+                # This backup check helps if the trigger
+                # has not created it yet.
+
+                try:
+
+                    db = admin_client()
+
+                    profiles = (
+                        db.table("profiles")
+                        .select("id")
+                        .eq("id", user_id)
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+
+                    if not profiles:
+
+                        db.table(
+                            "profiles"
+                        ).insert({
+                            "id": user_id,
+                            "full_name": full_name,
+                            "role": "employee",
+                            "approved": False
+                        }).execute()
+
+                except Exception as profile_error:
+
+                    print(
+                        "PROFILE CREATION WARNING:",
+                        repr(profile_error)
+                    )
+
+                flash(
+                    "Registration successful. "
+                    "Check your email for confirmation, "
+                    "then wait for Super Admin approval.",
+                    "success"
+                )
+
+                return redirect(
+                    url_for("login")
+                )
 
             flash(
-                "Registration successful. Check your email if confirmation is required.",
-                "success"
+                "Supabase did not create the user.",
+                "danger"
             )
-            return redirect(url_for("login"))
 
         except Exception as e:
-            print("REGISTER ERROR:", repr(e))
-            flash(f"Registration error: {str(e)}", "danger")
+
+            # IMPORTANT:
+            # This shows the actual Supabase error.
+            print(
+                "REGISTER ERROR:",
+                repr(e)
+            )
+
+            flash(
+                f"Registration error: {str(e)}",
+                "danger"
+            )
 
     return render_template("register.html")
 
-@app.get("/dashboard")
+
+# ---------------------------------------------------------
+# LOGOUT
+# ---------------------------------------------------------
+
+@app.route("/logout")
+def logout():
+
+    session.clear()
+
+    flash(
+        "You have been logged out.",
+        "success"
+    )
+
+    return redirect(
+        url_for("login")
+    )
+
+
+# ---------------------------------------------------------
+# DASHBOARD
+# ---------------------------------------------------------
+
+@app.route("/dashboard")
 @login_required
 def dashboard():
-    db = admin_client(); p = current_profile(); role=p.get("role")
-    stats={}
-    if role in ("super_admin","hr"):
-        stats["employees"] = len(db.table("employees").select("id").execute().data or [])
-        stats["review_dtr"] = len(db.table("dtr_entries").select("id").eq("requires_review", True).execute().data or [])
-        stats["complaints"] = len(db.table("complaints").select("id").in_("status", ["submitted","assessed"]).execute().data or [])
-    else:
-        emp = db.table("employees").select("id").eq("profile_id", p["id"]).limit(1).execute().data
-        stats["employee"] = emp[0] if emp else None
-    return render_template("dashboard.html", stats=stats)
 
-@app.route("/employees", methods=["GET", "POST"])
+    try:
+
+        db = admin_client()
+
+        profile = current_profile()
+
+        if not profile:
+
+            session.clear()
+
+            flash(
+                "Profile could not be found.",
+                "danger"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        role = profile.get("role")
+
+        stats = {}
+
+        if role in (
+            "super_admin",
+            "hr"
+        ):
+
+            employees_result = (
+                db.table("employees")
+                .select("id")
+                .execute()
+            )
+
+            review_result = (
+                db.table("dtr_entries")
+                .select("id")
+                .eq(
+                    "requires_review",
+                    True
+                )
+                .execute()
+            )
+
+            complaint_result = (
+                db.table("complaints")
+                .select("id")
+                .in_(
+                    "status",
+                    [
+                        "submitted",
+                        "assessed",
+                        "under_review"
+                    ]
+                )
+                .execute()
+            )
+
+            stats["employees"] = len(
+                employees_result.data or []
+            )
+
+            stats["review_dtr"] = len(
+                review_result.data or []
+            )
+
+            stats["complaints"] = len(
+                complaint_result.data or []
+            )
+
+        else:
+
+            employee_result = (
+                db.table("employees")
+                .select("*")
+                .eq(
+                    "profile_id",
+                    profile["id"]
+                )
+                .limit(1)
+                .execute()
+            )
+
+            stats["employee"] = (
+                employee_result.data[0]
+                if employee_result.data
+                else None
+            )
+
+        return render_template(
+            "dashboard.html",
+            stats=stats
+        )
+
+    except Exception as e:
+
+        print(
+            "DASHBOARD ERROR:",
+            repr(e)
+        )
+
+        flash(
+            f"Dashboard error: {str(e)}",
+            "danger"
+        )
+
+        return redirect(
+            url_for("login")
+        )
+
+
+# ---------------------------------------------------------
+# EMPLOYEE MANAGEMENT
+# ---------------------------------------------------------
+
+@app.route(
+    "/employees",
+    methods=["GET", "POST"]
+)
 @login_required
-@role_required("super_admin", "hr")
+@role_required(
+    "super_admin",
+    "hr"
+)
 def employees():
-    db=admin_client()
-    if request.method == "POST":
-        payload={
-            "employee_no":request.form["employee_no"], "full_name":request.form["full_name"],
-            "employee_type":request.form["employee_type"], "department":request.form.get("department"),
-            "monthly_salary":float(request.form.get("monthly_salary") or 0), "hourly_rate":float(request.form.get("hourly_rate") or 0),
-            "standard_hours":float(request.form.get("standard_hours") or 8), "workdays_per_month":float(request.form.get("workdays_per_month") or 22),
-            "active":True
-        }
-        try:
-            db.table("employees").insert(payload).execute(); flash("Employee added.","success")
-        except Exception as e: flash(f"Could not add employee: {e}","danger")
-        return redirect(url_for("employees"))
-    rows=db.table("employees").select("*").order("employee_no").execute().data or []
-    return render_template("employees.html", employees=rows)
 
-@app.route("/dtr/upload", methods=["GET", "POST"])
+    db = admin_client()
+
+    if request.method == "POST":
+
+        try:
+
+            payload = {
+
+                "employee_no":
+                    request.form[
+                        "employee_no"
+                    ],
+
+                "full_name":
+                    request.form[
+                        "full_name"
+                    ],
+
+                "employee_type":
+                    request.form[
+                        "employee_type"
+                    ],
+
+                "department":
+                    request.form.get(
+                        "department"
+                    ),
+
+                "monthly_salary":
+                    float(
+                        request.form.get(
+                            "monthly_salary"
+                        )
+                        or 0
+                    ),
+
+                "hourly_rate":
+                    float(
+                        request.form.get(
+                            "hourly_rate"
+                        )
+                        or 0
+                    ),
+
+                "standard_hours":
+                    float(
+                        request.form.get(
+                            "standard_hours"
+                        )
+                        or 8
+                    ),
+
+                "workdays_per_month":
+                    float(
+                        request.form.get(
+                            "workdays_per_month"
+                        )
+                        or 22
+                    ),
+
+                "active":
+                    True
+            }
+
+            db.table(
+                "employees"
+            ).insert(
+                payload
+            ).execute()
+
+            flash(
+                "Employee added successfully.",
+                "success"
+            )
+
+        except Exception as e:
+
+            print(
+                "EMPLOYEE INSERT ERROR:",
+                repr(e)
+            )
+
+            flash(
+                f"Could not add employee: {str(e)}",
+                "danger"
+            )
+
+        return redirect(
+            url_for("employees")
+        )
+
+    rows = (
+        db.table("employees")
+        .select("*")
+        .order("employee_no")
+        .execute()
+        .data
+        or []
+    )
+
+    return render_template(
+        "employees.html",
+        employees=rows
+    )
+
+
+# ---------------------------------------------------------
+# DTR UPLOAD
+# ---------------------------------------------------------
+
+@app.route(
+    "/dtr/upload",
+    methods=["GET", "POST"]
+)
 @login_required
-@role_required("super_admin", "hr")
+@role_required(
+    "super_admin",
+    "hr"
+)
 def dtr_upload():
-    db=admin_client()
+
+    db = admin_client()
+
     if request.method == "POST":
-        f=request.files.get("file")
-        if not f: flash("Choose a CSV file.","danger"); return redirect(request.url)
+
+        uploaded_file = request.files.get(
+            "file"
+        )
+
+        if not uploaded_file:
+
+            flash(
+                "Choose a CSV file.",
+                "danger"
+            )
+
+            return redirect(
+                request.url
+            )
+
         try:
-            rows=parse_csv(f.read()); batch=str(uuid.uuid4()); inserted=0; flagged=0; errors=[]
+
+            rows = parse_csv(
+                uploaded_file.read()
+            )
+
+            batch = str(
+                uuid.uuid4()
+            )
+
+            inserted = 0
+            flagged = 0
+            errors = []
+
             for row in rows:
-                emp=db.table("employees").select("id,standard_hours").eq("employee_no",row["employee_no"]).limit(1).execute().data
-                if not emp:
-                    errors.append(f"Row {row['row_number']}: employee {row['employee_no']} not found"); continue
-                result=evaluate_day(row["work_date"],row["time_in"],row["time_out"],standard_hours=emp[0].get("standard_hours") or 8)
-                payload={"employee_id":emp[0]["id"],"work_date":row["work_date"].isoformat(),"time_in":row["time_in"].isoformat() if row["time_in"] else None,"time_out":row["time_out"].isoformat() if row["time_out"] else None,"status":result["status"],"payable_hours":float(result["payable_hours"]),"reason":result["reason"],"requires_review":result["requires_review"],"import_batch":batch}
-                db.table("dtr_entries").upsert(payload,on_conflict="employee_id,work_date").execute(); inserted+=1; flagged += int(result["requires_review"])
-            flash(f"DTR import complete: {inserted} saved, {flagged} flagged. " + (" | ".join(errors[:5]) if errors else ""),"success")
-        except Exception as e: flash(f"DTR import failed: {e}","danger")
-        return redirect(url_for("dtr_upload"))
-    recent=db.table("dtr_entries").select("*,employees(employee_no,full_name)").order("work_date",desc=True).limit(100).execute().data or []
-    return render_template("dtr_upload.html", rows=recent)
 
-@app.route("/payroll", methods=["GET", "POST"])
+                employee = (
+                    db.table("employees")
+                    .select(
+                        "id,standard_hours"
+                    )
+                    .eq(
+                        "employee_no",
+                        row["employee_no"]
+                    )
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+
+                if not employee:
+
+                    errors.append(
+                        "Row "
+                        f"{row['row_number']}: "
+                        f"employee "
+                        f"{row['employee_no']} "
+                        "not found"
+                    )
+
+                    continue
+
+                evaluation = evaluate_day(
+
+                    row["work_date"],
+
+                    row["time_in"],
+
+                    row["time_out"],
+
+                    standard_hours=(
+                        employee[0].get(
+                            "standard_hours"
+                        )
+                        or 8
+                    )
+                )
+
+                payload = {
+
+                    "employee_id":
+                        employee[0]["id"],
+
+                    "work_date":
+                        row[
+                            "work_date"
+                        ].isoformat(),
+
+                    "time_in":
+                        (
+                            row[
+                                "time_in"
+                            ].isoformat()
+                            if row[
+                                "time_in"
+                            ]
+                            else None
+                        ),
+
+                    "time_out":
+                        (
+                            row[
+                                "time_out"
+                            ].isoformat()
+                            if row[
+                                "time_out"
+                            ]
+                            else None
+                        ),
+
+                    "status":
+                        evaluation[
+                            "status"
+                        ],
+
+                    "payable_hours":
+                        float(
+                            evaluation[
+                                "payable_hours"
+                            ]
+                        ),
+
+                    "reason":
+                        evaluation[
+                            "reason"
+                        ],
+
+                    "requires_review":
+                        evaluation[
+                            "requires_review"
+                        ],
+
+                    "import_batch":
+                        batch
+                }
+
+                (
+                    db.table(
+                        "dtr_entries"
+                    )
+                    .upsert(
+                        payload,
+                        on_conflict=(
+                            "employee_id,"
+                            "work_date"
+                        )
+                    )
+                    .execute()
+                )
+
+                inserted += 1
+
+                flagged += int(
+                    evaluation[
+                        "requires_review"
+                    ]
+                )
+
+            message = (
+                f"DTR import complete: "
+                f"{inserted} saved, "
+                f"{flagged} flagged."
+            )
+
+            if errors:
+
+                message += (
+                    " "
+                    + " | ".join(
+                        errors[:5]
+                    )
+                )
+
+            flash(
+                message,
+                "success"
+            )
+
+        except Exception as e:
+
+            print(
+                "DTR IMPORT ERROR:",
+                repr(e)
+            )
+
+            flash(
+                f"DTR import failed: {str(e)}",
+                "danger"
+            )
+
+        return redirect(
+            url_for("dtr_upload")
+        )
+
+    recent = (
+        db.table("dtr_entries")
+        .select(
+            "*,"
+            "employees("
+            "employee_no,"
+            "full_name"
+            ")"
+        )
+        .order(
+            "work_date",
+            desc=True
+        )
+        .limit(100)
+        .execute()
+        .data
+        or []
+    )
+
+    return render_template(
+        "dtr_upload.html",
+        rows=recent
+    )
+
+
+# ---------------------------------------------------------
+# PAYROLL
+# ---------------------------------------------------------
+
+@app.route(
+    "/payroll",
+    methods=["GET", "POST"]
+)
 @login_required
-@role_required("super_admin", "hr")
+@role_required(
+    "super_admin",
+    "hr"
+)
 def payroll():
-    db=admin_client()
+
+    db = admin_client()
+
     if request.method == "POST":
-        start=request.form["start_date"]; end=request.form["end_date"]; cutoff=int(request.form["cutoff_no"])
-        run=db.table("payroll_runs").insert({"start_date":start,"end_date":end,"cutoff_no":cutoff,"status":"draft","created_by":session["user_id"]}).execute().data[0]
-        emps=db.table("employees").select("*").eq("active",True).execute().data or []
-        for emp in emps:
-            dtr=db.table("dtr_entries").select("*").eq("employee_id",emp["id"]).gte("work_date",start).lte("work_date",end).execute().data or []
-            deductions=db.table("employee_deductions").select("*").eq("employee_id",emp["id"]).eq("active",True).execute().data or []
-            result=calculate(emp,start,end,cutoff,dtr,deductions)
-            item=db.table("payroll_items").insert({"payroll_run_id":run["id"],"employee_id":emp["id"],"gross_pay":result["gross_pay"],"total_deductions":result["total_deductions"],"net_pay":result["net_pay"],"attendance_summary":{"days":len(dtr),"flagged":sum(1 for x in dtr if x.get("requires_review"))}}).execute().data[0]
-            for ded in result["deductions"]:
-                db.table("payroll_item_deductions").insert({"payroll_item_id":item["id"],"deduction_id":ded.get("id"),"name":ded.get("name") or ded.get("kind"),"amount":ded["applied_amount"]}).execute()
-        flash("Payroll draft generated.","success"); return redirect(url_for("payroll"))
-    runs=db.table("payroll_runs").select("*").order("created_at",desc=True).limit(20).execute().data or []
-    return render_template("payroll.html", runs=runs)
 
-@app.get("/payroll/<run_id>")
+        try:
+
+            start = request.form[
+                "start_date"
+            ]
+
+            end = request.form[
+                "end_date"
+            ]
+
+            cutoff = int(
+                request.form[
+                    "cutoff_no"
+                ]
+            )
+
+            payroll_run = (
+                db.table(
+                    "payroll_runs"
+                )
+                .insert({
+                    "start_date":
+                        start,
+
+                    "end_date":
+                        end,
+
+                    "cutoff_no":
+                        cutoff,
+
+                    "status":
+                        "draft",
+
+                    "created_by":
+                        session[
+                            "user_id"
+                        ]
+                })
+                .execute()
+                .data[0]
+            )
+
+            employees_list = (
+                db.table(
+                    "employees"
+                )
+                .select("*")
+                .eq(
+                    "active",
+                    True
+                )
+                .execute()
+                .data
+                or []
+            )
+
+            for employee in employees_list:
+
+                dtr = (
+                    db.table(
+                        "dtr_entries"
+                    )
+                    .select("*")
+                    .eq(
+                        "employee_id",
+                        employee["id"]
+                    )
+                    .gte(
+                        "work_date",
+                        start
+                    )
+                    .lte(
+                        "work_date",
+                        end
+                    )
+                    .execute()
+                    .data
+                    or []
+                )
+
+                deductions = (
+                    db.table(
+                        "employee_deductions"
+                    )
+                    .select("*")
+                    .eq(
+                        "employee_id",
+                        employee["id"]
+                    )
+                    .eq(
+                        "active",
+                        True
+                    )
+                    .execute()
+                    .data
+                    or []
+                )
+
+                result = calculate(
+
+                    employee,
+
+                    start,
+
+                    end,
+
+                    cutoff,
+
+                    dtr,
+
+                    deductions
+                )
+
+                payroll_item = (
+                    db.table(
+                        "payroll_items"
+                    )
+                    .insert({
+
+                        "payroll_run_id":
+                            payroll_run[
+                                "id"
+                            ],
+
+                        "employee_id":
+                            employee[
+                                "id"
+                            ],
+
+                        "gross_pay":
+                            result[
+                                "gross_pay"
+                            ],
+
+                        "total_deductions":
+                            result[
+                                "total_deductions"
+                            ],
+
+                        "net_pay":
+                            result[
+                                "net_pay"
+                            ],
+
+                        "attendance_summary":
+                            {
+                                "days":
+                                    len(
+                                        dtr
+                                    ),
+
+                                "flagged":
+                                    sum(
+                                        1
+                                        for x
+                                        in dtr
+                                        if x.get(
+                                            "requires_review"
+                                        )
+                                    )
+                            }
+                    })
+                    .execute()
+                    .data[0]
+                )
+
+                for deduction in result[
+                    "deductions"
+                ]:
+
+                    (
+                        db.table(
+                            "payroll_item_deductions"
+                        )
+                        .insert({
+
+                            "payroll_item_id":
+                                payroll_item[
+                                    "id"
+                                ],
+
+                            "deduction_id":
+                                deduction.get(
+                                    "id"
+                                ),
+
+                            "name":
+                                (
+                                    deduction.get(
+                                        "name"
+                                    )
+                                    or
+                                    deduction.get(
+                                        "kind"
+                                    )
+                                ),
+
+                            "amount":
+                                deduction[
+                                    "applied_amount"
+                                ]
+                        })
+                        .execute()
+                    )
+
+            flash(
+                "Payroll draft generated.",
+                "success"
+            )
+
+        except Exception as e:
+
+            print(
+                "PAYROLL ERROR:",
+                repr(e)
+            )
+
+            flash(
+                f"Payroll generation failed: {str(e)}",
+                "danger"
+            )
+
+        return redirect(
+            url_for("payroll")
+        )
+
+    runs = (
+        db.table(
+            "payroll_runs"
+        )
+        .select("*")
+        .order(
+            "created_at",
+            desc=True
+        )
+        .limit(20)
+        .execute()
+        .data
+        or []
+    )
+
+    return render_template(
+        "payroll.html",
+        runs=runs
+    )
+
+
+# ---------------------------------------------------------
+# PAYROLL DETAILS
+# ---------------------------------------------------------
+
+@app.route(
+    "/payroll/<run_id>"
+)
 @login_required
-@role_required("super_admin", "hr")
+@role_required(
+    "super_admin",
+    "hr"
+)
 def payroll_run(run_id):
-    db=admin_client(); run=db.table("payroll_runs").select("*").eq("id",run_id).single().execute().data
-    items=db.table("payroll_items").select("*,employees(employee_no,full_name,employee_type)").eq("payroll_run_id",run_id).execute().data or []
-    return render_template("payroll_run.html", run=run, items=items)
 
-@app.post("/payroll/<run_id>/approve")
+    db = admin_client()
+
+    run = (
+        db.table(
+            "payroll_runs"
+        )
+        .select("*")
+        .eq(
+            "id",
+            run_id
+        )
+        .single()
+        .execute()
+        .data
+    )
+
+    items = (
+        db.table(
+            "payroll_items"
+        )
+        .select(
+            "*,"
+            "employees("
+            "employee_no,"
+            "full_name,"
+            "employee_type"
+            ")"
+        )
+        .eq(
+            "payroll_run_id",
+            run_id
+        )
+        .execute()
+        .data
+        or []
+    )
+
+    return render_template(
+        "payroll_run.html",
+        run=run,
+        items=items
+    )
+
+
+# ---------------------------------------------------------
+# APPROVE PAYROLL
+# ---------------------------------------------------------
+
+@app.route(
+    "/payroll/<run_id>/approve",
+    methods=["POST"]
+)
 @login_required
-@role_required("super_admin")
+@role_required(
+    "super_admin"
+)
 def approve_payroll(run_id):
-    admin_client().table("payroll_runs").update({"status":"approved","approved_by":session["user_id"],"approved_at":datetime.utcnow().isoformat()}).eq("id",run_id).execute()
-    flash("Payroll approved.","success"); return redirect(url_for("payroll_run",run_id=run_id))
 
-@app.route("/complaints", methods=["GET", "POST"])
+    try:
+
+        (
+            admin_client()
+            .table(
+                "payroll_runs"
+            )
+            .update({
+
+                "status":
+                    "approved",
+
+                "approved_by":
+                    session[
+                        "user_id"
+                    ],
+
+                "approved_at":
+                    datetime.utcnow()
+                    .isoformat()
+
+            })
+            .eq(
+                "id",
+                run_id
+            )
+            .execute()
+        )
+
+        flash(
+            "Payroll approved.",
+            "success"
+        )
+
+    except Exception as e:
+
+        print(
+            "APPROVE PAYROLL ERROR:",
+            repr(e)
+        )
+
+        flash(
+            f"Could not approve payroll: {str(e)}",
+            "danger"
+        )
+
+    return redirect(
+        url_for(
+            "payroll_run",
+            run_id=run_id
+        )
+    )
+
+
+# ---------------------------------------------------------
+# COMPLAINTS
+# ---------------------------------------------------------
+
+@app.route(
+    "/complaints",
+    methods=["GET", "POST"]
+)
 @login_required
 def complaints():
-    db=admin_client(); p=current_profile(); emp=None
-    if p["role"]=="employee":
-        e=db.table("employees").select("*").eq("profile_id",p["id"]).limit(1).execute().data; emp=e[0] if e else None
-    if request.method=="POST":
-        employee_id=request.form.get("employee_id") if p["role"] in ("super_admin","hr") else (emp["id"] if emp else None)
-        if not employee_id: flash("No employee profile is linked to this account.","danger"); return redirect(request.url)
-        row=db.table("complaints").insert({"employee_id":employee_id,"submitted_by":p["id"],"subject":request.form["subject"],"complaint_text":request.form["complaint_text"],"status":"submitted"}).execute().data[0]
+
+    db = admin_client()
+
+    profile = current_profile()
+
+    employee = None
+
+    if profile["role"] == "employee":
+
+        employee_result = (
+            db.table(
+                "employees"
+            )
+            .select("*")
+            .eq(
+                "profile_id",
+                profile["id"]
+            )
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+
+        if employee_result:
+
+            employee = (
+                employee_result[0]
+            )
+
+    if request.method == "POST":
+
+        if profile["role"] in (
+            "super_admin",
+            "hr"
+        ):
+
+            employee_id = (
+                request.form.get(
+                    "employee_id"
+                )
+            )
+
+        else:
+
+            employee_id = (
+                employee["id"]
+                if employee
+                else None
+            )
+
+        if not employee_id:
+
+            flash(
+                "No employee profile is linked to this account.",
+                "danger"
+            )
+
+            return redirect(
+                request.url
+            )
+
         try:
-            assessment,docs,facts=assess_complaint(row["complaint_text"],employee_id)
-            db.table("complaint_assessments").insert({"complaint_id":row["id"],"assessment":assessment,"retrieved_knowledge_ids":[d.get("id") for d in docs],"model":os.getenv("OPENAI_CHAT_MODEL","gpt-5.6-luna")}).execute()
-            db.table("complaints").update({"status":"assessed"}).eq("id",row["id"]).execute()
+
+            complaint = (
+                db.table(
+                    "complaints"
+                )
+                .insert({
+
+                    "employee_id":
+                        employee_id,
+
+                    "submitted_by":
+                        profile["id"],
+
+                    "subject":
+                        request.form[
+                            "subject"
+                        ],
+
+                    "complaint_text":
+                        request.form[
+                            "complaint_text"
+                        ],
+
+                    "status":
+                        "submitted"
+
+                })
+                .execute()
+                .data[0]
+            )
+
+            # RAG / AI complaint assessment
+            if assess_complaint:
+
+                try:
+
+                    result = assess_complaint(
+
+                        complaint[
+                            "complaint_text"
+                        ],
+
+                        employee_id
+                    )
+
+                    # Existing RAG versions may return
+                    # 1 value or a tuple.
+
+                    if isinstance(
+                        result,
+                        tuple
+                    ):
+
+                        assessment = (
+                            result[0]
+                        )
+
+                        docs = (
+                            result[1]
+                            if len(
+                                result
+                            ) > 1
+                            else []
+                        )
+
+                    else:
+
+                        assessment = (
+                            result
+                        )
+
+                        docs = []
+
+                    # assessment column is JSONB.
+                    # If the AI gives plain text,
+                    # store it inside an object.
+
+                    if isinstance(
+                        assessment,
+                        str
+                    ):
+
+                        assessment_data = {
+                            "assessment":
+                                assessment
+                        }
+
+                    else:
+
+                        assessment_data = (
+                            assessment
+                        )
+
+                    (
+                        db.table(
+                            "complaint_assessments"
+                        )
+                        .insert({
+
+                            "complaint_id":
+                                complaint[
+                                    "id"
+                                ],
+
+                            "assessment":
+                                assessment_data,
+
+                            "retrieved_knowledge_ids":
+                                [
+                                    d.get(
+                                        "id"
+                                    )
+                                    for d
+                                    in docs
+                                    if isinstance(
+                                        d,
+                                        dict
+                                    )
+                                ],
+
+                            "model":
+                                os.getenv(
+                                    "HF_MODEL",
+                                    "huggingface"
+                                )
+
+                        })
+                        .execute()
+                    )
+
+                    (
+                        db.table(
+                            "complaints"
+                        )
+                        .update({
+                            "status":
+                                "assessed"
+                        })
+                        .eq(
+                            "id",
+                            complaint[
+                                "id"
+                            ]
+                        )
+                        .execute()
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "RAG ERROR:",
+                        repr(e)
+                    )
+
+                    flash(
+                        "Complaint saved, "
+                        "but AI assessment "
+                        f"could not run: {str(e)}",
+                        "warning"
+                    )
+
+            flash(
+                "Complaint submitted.",
+                "success"
+            )
+
         except Exception as e:
-            flash(f"Complaint saved, but AI assessment could not run: {e}","warning")
-        return redirect(url_for("complaints"))
-    q=db.table("complaints").select("*,employees(employee_no,full_name),complaint_assessments(assessment,created_at)").order("created_at",desc=True)
-    if p["role"]=="employee" and emp: q=q.eq("employee_id",emp["id"])
-    rows=q.limit(100).execute().data or []
-    emps=db.table("employees").select("id,employee_no,full_name").eq("active",True).execute().data or [] if p["role"] in ("super_admin","hr") else []
-    return render_template("complaints.html", complaints=rows, employees=emps, employee=emp)
+
+            print(
+                "COMPLAINT ERROR:",
+                repr(e)
+            )
+
+            flash(
+                f"Could not submit complaint: {str(e)}",
+                "danger"
+            )
+
+        return redirect(
+            url_for(
+                "complaints"
+            )
+        )
+
+    query = (
+        db.table(
+            "complaints"
+        )
+        .select(
+            "*,"
+            "employees("
+            "employee_no,"
+            "full_name"
+            "),"
+            "complaint_assessments("
+            "assessment,"
+            "created_at"
+            ")"
+        )
+        .order(
+            "created_at",
+            desc=True
+        )
+    )
+
+    if (
+        profile["role"] == "employee"
+        and employee
+    ):
+
+        query = query.eq(
+            "employee_id",
+            employee["id"]
+        )
+
+    rows = (
+        query.limit(100)
+        .execute()
+        .data
+        or []
+    )
+
+    if profile["role"] in (
+        "super_admin",
+        "hr"
+    ):
+
+        employees_list = (
+            db.table(
+                "employees"
+            )
+            .select(
+                "id,"
+                "employee_no,"
+                "full_name"
+            )
+            .eq(
+                "active",
+                True
+            )
+            .execute()
+            .data
+            or []
+        )
+
+    else:
+
+        employees_list = []
+
+    return render_template(
+        "complaints.html",
+        complaints=rows,
+        employees=employees_list,
+        employee=employee
+    )
+
+
+# ---------------------------------------------------------
+# VERCEL / LOCAL RUN
+# ---------------------------------------------------------
+
+# IMPORTANT:
+# Vercel detects the top-level variable:
+#
+# app = Flask(__name__)
+#
+# Do not move "app" inside another function.
 
 if __name__ == "__main__":
-    app.run(debug=True)
+
+    app.run(
+        host="0.0.0.0",
+        port=int(
+            os.getenv(
+                "PORT",
+                5000
+            )
+        ),
+        debug=True
+    )
