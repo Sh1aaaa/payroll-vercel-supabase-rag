@@ -41,17 +41,33 @@ def login():
 def register():
     if request.method == "POST":
         try:
-            public_client().auth.sign_up({"email": request.form["email"], "password": request.form["password"], "options": {"data": {"full_name": request.form.get("full_name", "")}}})
-            flash("Registration submitted. Ask the Super Admin to approve/assign your role.", "success")
-            return redirect(url_for("login"))
-        except Exception:
-            flash("Could not register that account.", "danger")
-    return render_template("register.html")
+            email = request.form["email"].strip()
+            password = request.form["password"]
+            full_name = request.form.get("full_name", "").strip()
 
-@app.get("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
+            response = public_client().auth.sign_up({
+                "email": email,
+                "password": password,
+                "options": {
+                    "data": {
+                        "full_name": full_name
+                    }
+                }
+            })
+
+            print("REGISTER SUCCESS:", response)
+
+            flash(
+                "Registration successful. Check your email if confirmation is required.",
+                "success"
+            )
+            return redirect(url_for("login"))
+
+        except Exception as e:
+            print("REGISTER ERROR:", repr(e))
+            flash(f"Registration error: {str(e)}", "danger")
+
+    return render_template("register.html")
 
 @app.get("/dashboard")
 @login_required
