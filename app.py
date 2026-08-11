@@ -12,6 +12,7 @@ from flask import (
     session,
     jsonify,
 )
+
 from dotenv import load_dotenv
 
 from services.supabase_service import public_client, admin_client
@@ -19,8 +20,7 @@ from services.auth_service import login_required, role_required, current_profile
 from services.dtr_service import parse_csv, evaluate_day
 from services.payroll_service import calculate
 
-# If your Hugging Face rag_service.py already exists,
-# this import will use it.
+# RAG import
 try:
     from services.rag_service import assess_complaint
 except Exception as e:
@@ -38,12 +38,12 @@ app = Flask(__name__)
 
 app.secret_key = os.getenv(
     "FLASK_SECRET_KEY",
-    "dev-only-change-this-secret-key"
+    "dev-only-change-this-secret"
 )
 
 
 # ---------------------------------------------------------
-# HELPERS
+# PROFILE CONTEXT
 # ---------------------------------------------------------
 
 @app.context_processor
@@ -58,23 +58,52 @@ def inject_profile():
     }
 
 
+# ---------------------------------------------------------
+# HEALTH CHECK
+# ---------------------------------------------------------
+
 @app.route("/health")
 def health():
     return jsonify({
-        "status": "success",
-        "app": "Payroll System",
-        "message": "Flask application is running."
+        "status": "ok",
+        "message": "Payroll System is running"
     })
 
 
+# ---------------------------------------------------------
+# ENVIRONMENT TEST
+# ---------------------------------------------------------
+
+@app.route("/test-env")
+def test_env():
+
+    return jsonify({
+        "SUPABASE_URL":
+            bool(os.getenv("SUPABASE_URL")),
+
+        "SUPABASE_ANON_KEY":
+            bool(os.getenv("SUPABASE_ANON_KEY")),
+
+        "SUPABASE_SERVICE_ROLE_KEY":
+            bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+
+        "FLASK_SECRET_KEY":
+            bool(os.getenv("FLASK_SECRET_KEY")),
+
+        "HF_TOKEN":
+            bool(os.getenv("HF_TOKEN")),
+    })
+
+
+# ---------------------------------------------------------
+# DATABASE TEST
+# ---------------------------------------------------------
+
 @app.route("/test-db")
 def test_db():
-    """
-    Tests the connection between:
-    Vercel -> Flask -> Supabase database
-    """
 
     try:
+
         db = admin_client()
 
         result = (
@@ -91,31 +120,17 @@ def test_db():
         }), 200
 
     except Exception as e:
-        print("DATABASE TEST ERROR:", repr(e))
+
+        print(
+            "DATABASE TEST ERROR:",
+            repr(e)
+        )
 
         return jsonify({
             "status": "error",
             "database": "not connected",
             "error": str(e)
         }), 500
-
-
-@app.route("/test-env")
-def test_env():
-    """
-    Shows only whether variables exist.
-    DOES NOT reveal secret values.
-    """
-
-    return jsonify({
-        "SUPABASE_URL": bool(os.getenv("SUPABASE_URL")),
-        "SUPABASE_ANON_KEY": bool(os.getenv("SUPABASE_ANON_KEY")),
-        "SUPABASE_SERVICE_ROLE_KEY": bool(
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        ),
-        "FLASK_SECRET_KEY": bool(os.getenv("FLASK_SECRET_KEY")),
-        "HF_TOKEN": bool(os.getenv("HF_TOKEN")),
-    })
 
 
 # ---------------------------------------------------------
@@ -126,53 +141,83 @@ def test_env():
 def index():
 
     if session.get("user_id"):
-        return redirect(url_for("dashboard"))
+        return redirect(
+            url_for("dashboard")
+        )
 
-    return redirect(url_for("login"))
+    return redirect(
+        url_for("login")
+    )
 
 
 # ---------------------------------------------------------
 # LOGIN
 # ---------------------------------------------------------
 
-@app.route("/login", methods=["GET", "POST"])
+@app.route(
+    "/login",
+    methods=["GET", "POST"]
+)
 def login():
 
     if request.method == "POST":
 
-        email = request.form.get("email", "").strip()
-        password = request.form.get("password", "")
+        email = request.form.get(
+            "email",
+            ""
+        ).strip()
+
+        password = request.form.get(
+            "password",
+            ""
+        )
 
         if not email or not password:
+
             flash(
                 "Please enter your email and password.",
                 "danger"
             )
-            return render_template("login.html")
+
+            return render_template(
+                "login.html"
+            )
 
         try:
 
-            result = public_client().auth.sign_in_with_password({
-                "email": email,
-                "password": password
-            })
+            result = (
+                public_client()
+                .auth
+                .sign_in_with_password({
+                    "email": email,
+                    "password": password
+                })
+            )
 
             if not result.user:
+
                 flash(
                     "Login failed.",
                     "danger"
                 )
-                return render_template("login.html")
 
-            user_id = str(result.user.id)
+                return render_template(
+                    "login.html"
+                )
 
-            # Check profile
+            user_id = str(
+                result.user.id
+            )
+
             db = admin_client()
 
             profiles = (
                 db.table("profiles")
                 .select("*")
-                .eq("id", user_id)
+                .eq(
+                    "id",
+                    user_id
+                )
                 .limit(1)
                 .execute()
                 .data
@@ -182,54 +227,74 @@ def login():
             if not profiles:
 
                 flash(
-                    "Your account exists, but no profile was found.",
+                    "Your authentication account exists, "
+                    "but no profile record was found.",
                     "danger"
                 )
 
-                return render_template("login.html")
+                return render_template(
+                    "login.html"
+                )
 
             profile = profiles[0]
 
-            # Optional approval system
-            if not profile.get("approved", False):
+            if not profile.get(
+                "approved",
+                False
+            ):
 
                 flash(
-                    "Your account is waiting for Super Admin approval.",
+                    "Your account is waiting for "
+                    "Super Admin approval.",
                     "warning"
                 )
 
-                return render_template("login.html")
+                return render_template(
+                    "login.html"
+                )
 
             session.clear()
 
             session["user_id"] = user_id
             session["email"] = result.user.email
-            session["role"] = profile.get("role")
+            session["role"] = profile.get(
+                "role"
+            )
 
             flash(
                 "Login successful.",
                 "success"
             )
 
-            return redirect(url_for("dashboard"))
+            return redirect(
+                url_for("dashboard")
+            )
 
         except Exception as e:
 
-            print("LOGIN ERROR:", repr(e))
+            print(
+                "LOGIN ERROR:",
+                repr(e)
+            )
 
             flash(
                 f"Login error: {str(e)}",
                 "danger"
             )
 
-    return render_template("login.html")
+    return render_template(
+        "login.html"
+    )
 
 
 # ---------------------------------------------------------
 # REGISTER
 # ---------------------------------------------------------
 
-@app.route("/register", methods=["GET", "POST"])
+@app.route(
+    "/register",
+    methods=["GET", "POST"]
+)
 def register():
 
     if request.method == "POST":
@@ -249,7 +314,9 @@ def register():
             ""
         )
 
-        # Basic validation
+        # -------------------------------
+        # Validation
+        # -------------------------------
 
         if not full_name:
 
@@ -258,16 +325,20 @@ def register():
                 "danger"
             )
 
-            return render_template("register.html")
+            return render_template(
+                "register.html"
+            )
 
         if not email:
 
             flash(
-                "Please enter your email.",
+                "Please enter your email address.",
                 "danger"
             )
 
-            return render_template("register.html")
+            return render_template(
+                "register.html"
+            )
 
         if not password:
 
@@ -276,7 +347,9 @@ def register():
                 "danger"
             )
 
-            return render_template("register.html")
+            return render_template(
+                "register.html"
+            )
 
         if len(password) < 6:
 
@@ -285,7 +358,9 @@ def register():
                 "danger"
             )
 
-            return render_template("register.html")
+            return render_template(
+                "register.html"
+            )
 
         try:
 
@@ -299,6 +374,7 @@ def register():
             result = supabase.auth.sign_up({
                 "email": email,
                 "password": password,
+
                 "options": {
                     "data": {
                         "full_name": full_name
@@ -311,70 +387,84 @@ def register():
                 result
             )
 
-            if result.user:
-
-                user_id = str(
-                    result.user.id
-                )
-
-                # The database trigger should automatically
-                # create the profile row.
-                #
-                # This backup check helps if the trigger
-                # has not created it yet.
-
-                try:
-
-                    db = admin_client()
-
-                    profiles = (
-                        db.table("profiles")
-                        .select("id")
-                        .eq("id", user_id)
-                        .limit(1)
-                        .execute()
-                        .data
-                        or []
-                    )
-
-                    if not profiles:
-
-                        db.table(
-                            "profiles"
-                        ).insert({
-                            "id": user_id,
-                            "full_name": full_name,
-                            "role": "employee",
-                            "approved": False
-                        }).execute()
-
-                except Exception as profile_error:
-
-                    print(
-                        "PROFILE CREATION WARNING:",
-                        repr(profile_error)
-                    )
+            if not result.user:
 
                 flash(
-                    "Registration successful. "
-                    "Check your email for confirmation, "
-                    "then wait for Super Admin approval.",
-                    "success"
+                    "Supabase did not return a user account.",
+                    "danger"
                 )
 
-                return redirect(
-                    url_for("login")
+                return render_template(
+                    "register.html"
+                )
+
+            user_id = str(
+                result.user.id
+            )
+
+            # ---------------------------------
+            # Verify/create profile
+            # ---------------------------------
+
+            try:
+
+                db = admin_client()
+
+                existing_profile = (
+                    db.table("profiles")
+                    .select("id")
+                    .eq(
+                        "id",
+                        user_id
+                    )
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+
+                if not existing_profile:
+
+                    db.table(
+                        "profiles"
+                    ).insert({
+
+                        "id":
+                            user_id,
+
+                        "full_name":
+                            full_name,
+
+                        "role":
+                            "employee",
+
+                        "approved":
+                            False
+
+                    }).execute()
+
+            except Exception as profile_error:
+
+                print(
+                    "PROFILE CREATION WARNING:",
+                    repr(profile_error)
                 )
 
             flash(
-                "Supabase did not create the user.",
-                "danger"
+                "Registration successful. "
+                "Please confirm your email if required, "
+                "then wait for Super Admin approval.",
+                "success"
+            )
+
+            return redirect(
+                url_for("login")
             )
 
         except Exception as e:
 
             # IMPORTANT:
-            # This shows the actual Supabase error.
+            # Show actual Supabase error
             print(
                 "REGISTER ERROR:",
                 repr(e)
@@ -385,7 +475,9 @@ def register():
                 "danger"
             )
 
-    return render_template("register.html")
+    return render_template(
+        "register.html"
+    )
 
 
 # ---------------------------------------------------------
@@ -396,11 +488,6 @@ def register():
 def logout():
 
     session.clear()
-
-    flash(
-        "You have been logged out.",
-        "success"
-    )
 
     return redirect(
         url_for("login")
@@ -434,7 +521,9 @@ def dashboard():
                 url_for("login")
             )
 
-        role = profile.get("role")
+        role = profile.get(
+            "role"
+        )
 
         stats = {}
 
@@ -466,8 +555,7 @@ def dashboard():
                     "status",
                     [
                         "submitted",
-                        "assessed",
-                        "under_review"
+                        "assessed"
                     ]
                 )
                 .execute()
@@ -545,65 +633,65 @@ def employees():
 
     if request.method == "POST":
 
-        try:
+        payload = {
 
-            payload = {
+            "employee_no":
+                request.form[
+                    "employee_no"
+                ],
 
-                "employee_no":
-                    request.form[
-                        "employee_no"
-                    ],
+            "full_name":
+                request.form[
+                    "full_name"
+                ],
 
-                "full_name":
-                    request.form[
-                        "full_name"
-                    ],
+            "employee_type":
+                request.form[
+                    "employee_type"
+                ],
 
-                "employee_type":
-                    request.form[
-                        "employee_type"
-                    ],
+            "department":
+                request.form.get(
+                    "department"
+                ),
 
-                "department":
+            "monthly_salary":
+                float(
                     request.form.get(
-                        "department"
-                    ),
+                        "monthly_salary"
+                    )
+                    or 0
+                ),
 
-                "monthly_salary":
-                    float(
-                        request.form.get(
-                            "monthly_salary"
-                        )
-                        or 0
-                    ),
+            "hourly_rate":
+                float(
+                    request.form.get(
+                        "hourly_rate"
+                    )
+                    or 0
+                ),
 
-                "hourly_rate":
-                    float(
-                        request.form.get(
-                            "hourly_rate"
-                        )
-                        or 0
-                    ),
+            "standard_hours":
+                float(
+                    request.form.get(
+                        "standard_hours"
+                    )
+                    or 8
+                ),
 
-                "standard_hours":
-                    float(
-                        request.form.get(
-                            "standard_hours"
-                        )
-                        or 8
-                    ),
+            "workdays_per_month":
+                float(
+                    request.form.get(
+                        "workdays_per_month"
+                    )
+                    or 22
+                ),
 
-                "workdays_per_month":
-                    float(
-                        request.form.get(
-                            "workdays_per_month"
-                        )
-                        or 22
-                    ),
+            "active":
+                True
+        }
 
-                "active":
-                    True
-            }
+        try:
 
             db.table(
                 "employees"
@@ -612,14 +700,14 @@ def employees():
             ).execute()
 
             flash(
-                "Employee added successfully.",
+                "Employee added.",
                 "success"
             )
 
         except Exception as e:
 
             print(
-                "EMPLOYEE INSERT ERROR:",
+                "EMPLOYEE ERROR:",
                 repr(e)
             )
 
@@ -715,11 +803,8 @@ def dtr_upload():
                 if not employee:
 
                     errors.append(
-                        "Row "
-                        f"{row['row_number']}: "
-                        f"employee "
-                        f"{row['employee_no']} "
-                        "not found"
+                        f"Row {row['row_number']}: "
+                        f"employee {row['employee_no']} not found"
                     )
 
                     continue
@@ -843,7 +928,7 @@ def dtr_upload():
         except Exception as e:
 
             print(
-                "DTR IMPORT ERROR:",
+                "DTR ERROR:",
                 repr(e)
             )
 
@@ -859,8 +944,7 @@ def dtr_upload():
     recent = (
         db.table("dtr_entries")
         .select(
-            "*,"
-            "employees("
+            "*,employees("
             "employee_no,"
             "full_name"
             ")"
@@ -916,11 +1000,12 @@ def payroll():
                 ]
             )
 
-            payroll_run = (
+            run = (
                 db.table(
                     "payroll_runs"
                 )
                 .insert({
+
                     "start_date":
                         start,
 
@@ -937,12 +1022,13 @@ def payroll():
                         session[
                             "user_id"
                         ]
+
                 })
                 .execute()
                 .data[0]
             )
 
-            employees_list = (
+            employee_rows = (
                 db.table(
                     "employees"
                 )
@@ -956,7 +1042,7 @@ def payroll():
                 or []
             )
 
-            for employee in employees_list:
+            for employee in employee_rows:
 
                 dtr = (
                     db.table(
@@ -999,35 +1085,25 @@ def payroll():
                 )
 
                 result = calculate(
-
                     employee,
-
                     start,
-
                     end,
-
                     cutoff,
-
                     dtr,
-
                     deductions
                 )
 
-                payroll_item = (
+                item = (
                     db.table(
                         "payroll_items"
                     )
                     .insert({
 
                         "payroll_run_id":
-                            payroll_run[
-                                "id"
-                            ],
+                            run["id"],
 
                         "employee_id":
-                            employee[
-                                "id"
-                            ],
+                            employee["id"],
 
                         "gross_pay":
                             result[
@@ -1047,20 +1123,19 @@ def payroll():
                         "attendance_summary":
                             {
                                 "days":
-                                    len(
-                                        dtr
-                                    ),
+                                    len(dtr),
 
                                 "flagged":
                                     sum(
                                         1
-                                        for x
+                                        for row
                                         in dtr
-                                        if x.get(
+                                        if row.get(
                                             "requires_review"
                                         )
                                     )
                             }
+
                     })
                     .execute()
                     .data[0]
@@ -1077,9 +1152,7 @@ def payroll():
                         .insert({
 
                             "payroll_item_id":
-                                payroll_item[
-                                    "id"
-                                ],
+                                item["id"],
 
                             "deduction_id":
                                 deduction.get(
@@ -1101,6 +1174,7 @@ def payroll():
                                 deduction[
                                     "applied_amount"
                                 ]
+
                         })
                         .execute()
                     )
@@ -1182,8 +1256,7 @@ def payroll_run(run_id):
             "payroll_items"
         )
         .select(
-            "*,"
-            "employees("
+            "*,employees("
             "employee_no,"
             "full_name,"
             "employee_type"
@@ -1256,7 +1329,7 @@ def approve_payroll(run_id):
     except Exception as e:
 
         print(
-            "APPROVE PAYROLL ERROR:",
+            "APPROVAL ERROR:",
             repr(e)
         )
 
@@ -1292,7 +1365,7 @@ def complaints():
 
     if profile["role"] == "employee":
 
-        employee_result = (
+        employee_rows = (
             db.table(
                 "employees"
             )
@@ -1307,10 +1380,10 @@ def complaints():
             or []
         )
 
-        if employee_result:
+        if employee_rows:
 
             employee = (
-                employee_result[0]
+                employee_rows[0]
             )
 
     if request.method == "POST":
@@ -1377,22 +1450,20 @@ def complaints():
                 .data[0]
             )
 
-            # RAG / AI complaint assessment
+            # -------------------------------
+            # RAG assessment
+            # -------------------------------
+
             if assess_complaint:
 
                 try:
 
                     result = assess_complaint(
-
                         complaint[
                             "complaint_text"
                         ],
-
                         employee_id
                     )
-
-                    # Existing RAG versions may return
-                    # 1 value or a tuple.
 
                     if isinstance(
                         result,
@@ -1405,9 +1476,7 @@ def complaints():
 
                         docs = (
                             result[1]
-                            if len(
-                                result
-                            ) > 1
+                            if len(result) > 1
                             else []
                         )
 
@@ -1418,10 +1487,6 @@ def complaints():
                         )
 
                         docs = []
-
-                    # assessment column is JSONB.
-                    # If the AI gives plain text,
-                    # store it inside an object.
 
                     if isinstance(
                         assessment,
@@ -1439,42 +1504,34 @@ def complaints():
                             assessment
                         )
 
-                    (
-                        db.table(
-                            "complaint_assessments"
-                        )
-                        .insert({
+                    db.table(
+                        "complaint_assessments"
+                    ).insert({
 
-                            "complaint_id":
-                                complaint[
-                                    "id"
-                                ],
+                        "complaint_id":
+                            complaint["id"],
 
-                            "assessment":
-                                assessment_data,
+                        "assessment":
+                            assessment_data,
 
-                            "retrieved_knowledge_ids":
-                                [
-                                    d.get(
-                                        "id"
-                                    )
-                                    for d
-                                    in docs
-                                    if isinstance(
-                                        d,
-                                        dict
-                                    )
-                                ],
-
-                            "model":
-                                os.getenv(
-                                    "HF_MODEL",
-                                    "huggingface"
+                        "retrieved_knowledge_ids":
+                            [
+                                doc.get("id")
+                                for doc
+                                in docs
+                                if isinstance(
+                                    doc,
+                                    dict
                                 )
+                            ],
 
-                        })
-                        .execute()
-                    )
+                        "model":
+                            os.getenv(
+                                "HF_MODEL",
+                                "huggingface"
+                            )
+
+                    }).execute()
 
                     (
                         db.table(
@@ -1486,9 +1543,7 @@ def complaints():
                         })
                         .eq(
                             "id",
-                            complaint[
-                                "id"
-                            ]
+                            complaint["id"]
                         )
                         .execute()
                     )
@@ -1501,9 +1556,8 @@ def complaints():
                     )
 
                     flash(
-                        "Complaint saved, "
-                        "but AI assessment "
-                        f"could not run: {str(e)}",
+                        "Complaint saved, but AI assessment failed: "
+                        f"{str(e)}",
                         "warning"
                     )
 
@@ -1525,9 +1579,7 @@ def complaints():
             )
 
         return redirect(
-            url_for(
-                "complaints"
-            )
+            url_for("complaints")
         )
 
     query = (
@@ -1573,7 +1625,7 @@ def complaints():
         "hr"
     ):
 
-        employees_list = (
+        employee_list = (
             db.table(
                 "employees"
             )
@@ -1593,26 +1645,22 @@ def complaints():
 
     else:
 
-        employees_list = []
+        employee_list = []
 
     return render_template(
         "complaints.html",
         complaints=rows,
-        employees=employees_list,
+        employees=employee_list,
         employee=employee
     )
 
 
 # ---------------------------------------------------------
-# VERCEL / LOCAL RUN
+# LOCAL RUN
 # ---------------------------------------------------------
 
-# IMPORTANT:
-# Vercel detects the top-level variable:
-#
+# Vercel detects this top-level variable:
 # app = Flask(__name__)
-#
-# Do not move "app" inside another function.
 
 if __name__ == "__main__":
 
