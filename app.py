@@ -20,7 +20,10 @@ from services.auth_service import login_required, role_required, current_profile
 from services.dtr_service import parse_csv, evaluate_day
 from services.payroll_service import calculate
 
-# RAG import
+# ---------------------------------------------------------
+# RAG
+# ---------------------------------------------------------
+
 try:
     from services.rag_service import assess_complaint
 except Exception as e:
@@ -66,7 +69,7 @@ def inject_profile():
 def health():
     return jsonify({
         "status": "ok",
-        "message": "Payroll System is running"
+        "message": "BulSU Payroll System is running"
     })
 
 
@@ -78,20 +81,13 @@ def health():
 def test_env():
 
     return jsonify({
-        "SUPABASE_URL":
-            bool(os.getenv("SUPABASE_URL")),
-
-        "SUPABASE_ANON_KEY":
-            bool(os.getenv("SUPABASE_ANON_KEY")),
-
-        "SUPABASE_SERVICE_ROLE_KEY":
-            bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
-
-        "FLASK_SECRET_KEY":
-            bool(os.getenv("FLASK_SECRET_KEY")),
-
-        "HF_TOKEN":
-            bool(os.getenv("HF_TOKEN")),
+        "SUPABASE_URL": bool(os.getenv("SUPABASE_URL")),
+        "SUPABASE_ANON_KEY": bool(os.getenv("SUPABASE_ANON_KEY")),
+        "SUPABASE_SERVICE_ROLE_KEY": bool(
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        ),
+        "FLASK_SECRET_KEY": bool(os.getenv("FLASK_SECRET_KEY")),
+        "HF_TOKEN": bool(os.getenv("HF_TOKEN")),
     })
 
 
@@ -103,15 +99,9 @@ def test_env():
 def test_db():
 
     try:
-
         db = admin_client()
 
-        result = (
-            db.table("profiles")
-            .select("id")
-            .limit(1)
-            .execute()
-        )
+        db.table("profiles").select("id").limit(1).execute()
 
         return jsonify({
             "status": "success",
@@ -121,10 +111,7 @@ def test_db():
 
     except Exception as e:
 
-        print(
-            "DATABASE TEST ERROR:",
-            repr(e)
-        )
+        print("DATABASE TEST ERROR:", repr(e))
 
         return jsonify({
             "status": "error",
@@ -141,36 +128,22 @@ def test_db():
 def index():
 
     if session.get("user_id"):
-        return redirect(
-            url_for("dashboard")
-        )
+        return redirect(url_for("dashboard"))
 
-    return redirect(
-        url_for("login")
-    )
+    return redirect(url_for("login"))
 
 
 # ---------------------------------------------------------
 # LOGIN
 # ---------------------------------------------------------
 
-@app.route(
-    "/login",
-    methods=["GET", "POST"]
-)
+@app.route("/login", methods=["GET", "POST"])
 def login():
 
     if request.method == "POST":
 
-        email = request.form.get(
-            "email",
-            ""
-        ).strip()
-
-        password = request.form.get(
-            "password",
-            ""
-        )
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
 
         if not email or not password:
 
@@ -179,9 +152,7 @@ def login():
                 "danger"
             )
 
-            return render_template(
-                "login.html"
-            )
+            return render_template("login.html")
 
         try:
 
@@ -197,27 +168,20 @@ def login():
             if not result.user:
 
                 flash(
-                    "Login failed.",
+                    "Invalid email or password.",
                     "danger"
                 )
 
-                return render_template(
-                    "login.html"
-                )
+                return render_template("login.html")
 
-            user_id = str(
-                result.user.id
-            )
+            user_id = str(result.user.id)
 
             db = admin_client()
 
             profiles = (
                 db.table("profiles")
                 .select("*")
-                .eq(
-                    "id",
-                    user_id
-                )
+                .eq("id", user_id)
                 .limit(1)
                 .execute()
                 .data
@@ -232,69 +196,49 @@ def login():
                     "danger"
                 )
 
-                return render_template(
-                    "login.html"
-                )
+                return render_template("login.html")
 
             profile = profiles[0]
 
-            if not profile.get(
-                "approved",
-                False
-            ):
+            if not profile.get("approved", False):
 
                 flash(
-                    "Your account is waiting for "
-                    "Super Admin approval.",
+                    "Your account is waiting for Super Admin approval.",
                     "warning"
                 )
 
-                return render_template(
-                    "login.html"
-                )
+                return render_template("login.html")
 
             session.clear()
 
             session["user_id"] = user_id
             session["email"] = result.user.email
-            session["role"] = profile.get(
-                "role"
-            )
+            session["role"] = profile.get("role")
 
             flash(
                 "Login successful.",
                 "success"
             )
 
-            return redirect(
-                url_for("dashboard")
-            )
+            return redirect(url_for("dashboard"))
 
         except Exception as e:
 
-            print(
-                "LOGIN ERROR:",
-                repr(e)
-            )
+            print("LOGIN ERROR:", repr(e))
 
             flash(
                 f"Login error: {str(e)}",
                 "danger"
             )
 
-    return render_template(
-        "login.html"
-    )
+    return render_template("login.html")
 
 
 # ---------------------------------------------------------
 # REGISTER
 # ---------------------------------------------------------
 
-@app.route(
-    "/register",
-    methods=["GET", "POST"]
-)
+@app.route("/register", methods=["GET", "POST"])
 def register():
 
     if request.method == "POST":
@@ -314,9 +258,10 @@ def register():
             ""
         )
 
-        # -------------------------------
-        # Validation
-        # -------------------------------
+        confirm_password = request.form.get(
+            "confirm_password",
+            ""
+        )
 
         if not full_name:
 
@@ -325,9 +270,7 @@ def register():
                 "danger"
             )
 
-            return render_template(
-                "register.html"
-            )
+            return render_template("register.html")
 
         if not email:
 
@@ -336,20 +279,7 @@ def register():
                 "danger"
             )
 
-            return render_template(
-                "register.html"
-            )
-
-        if not password:
-
-            flash(
-                "Please enter a password.",
-                "danger"
-            )
-
-            return render_template(
-                "register.html"
-            )
+            return render_template("register.html")
 
         if len(password) < 6:
 
@@ -358,23 +288,24 @@ def register():
                 "danger"
             )
 
-            return render_template(
-                "register.html"
+            return render_template("register.html")
+
+        if password != confirm_password:
+
+            flash(
+                "Passwords do not match.",
+                "danger"
             )
+
+            return render_template("register.html")
 
         try:
-
-            print(
-                "REGISTER ATTEMPT:",
-                email
-            )
 
             supabase = public_client()
 
             result = supabase.auth.sign_up({
                 "email": email,
                 "password": password,
-
                 "options": {
                     "data": {
                         "full_name": full_name
@@ -382,30 +313,18 @@ def register():
                 }
             })
 
-            print(
-                "REGISTER RESULT:",
-                result
-            )
-
             if not result.user:
 
                 flash(
-                    "Supabase did not return a user account.",
+                    "Supabase did not create the account.",
                     "danger"
                 )
 
-                return render_template(
-                    "register.html"
-                )
+                return render_template("register.html")
 
-            user_id = str(
-                result.user.id
-            )
+            user_id = str(result.user.id)
 
-            # ---------------------------------
-            # Verify/create profile
-            # ---------------------------------
-
+            # Create profile if database trigger did not.
             try:
 
                 db = admin_client()
@@ -413,10 +332,7 @@ def register():
                 existing_profile = (
                     db.table("profiles")
                     .select("id")
-                    .eq(
-                        "id",
-                        user_id
-                    )
+                    .eq("id", user_id)
                     .limit(1)
                     .execute()
                     .data
@@ -425,22 +341,11 @@ def register():
 
                 if not existing_profile:
 
-                    db.table(
-                        "profiles"
-                    ).insert({
-
-                        "id":
-                            user_id,
-
-                        "full_name":
-                            full_name,
-
-                        "role":
-                            "employee",
-
-                        "approved":
-                            False
-
+                    db.table("profiles").insert({
+                        "id": user_id,
+                        "full_name": full_name,
+                        "role": "employee",
+                        "approved": False
                     }).execute()
 
             except Exception as profile_error:
@@ -457,27 +362,201 @@ def register():
                 "success"
             )
 
-            return redirect(
-                url_for("login")
-            )
+            return redirect(url_for("login"))
 
         except Exception as e:
 
-            # IMPORTANT:
-            # Show actual Supabase error
-            print(
-                "REGISTER ERROR:",
-                repr(e)
-            )
+            print("REGISTER ERROR:", repr(e))
 
             flash(
                 f"Registration error: {str(e)}",
                 "danger"
             )
 
+    return render_template("register.html")
+
+
+# ---------------------------------------------------------
+# FORGOT PASSWORD
+# ---------------------------------------------------------
+
+@app.route(
+    "/forgot-password",
+    methods=["GET", "POST"]
+)
+def forgot_password():
+
+    if request.method == "POST":
+
+        email = request.form.get(
+            "email",
+            ""
+        ).strip()
+
+        if not email:
+
+            flash(
+                "Please enter your email address.",
+                "danger"
+            )
+
+            return render_template(
+                "forgot_password.html"
+            )
+
+        try:
+
+            reset_url = url_for(
+                "reset_password",
+                _external=True,
+                _scheme="https"
+            )
+
+            public_client().auth.reset_password_for_email(
+                email,
+                {
+                    "redirect_to": reset_url
+                }
+            )
+
+            # Generic response is better than revealing
+            # whether an email address exists.
+            flash(
+                "If that email is registered, "
+                "a password reset link has been sent.",
+                "success"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        except Exception as e:
+
+            print(
+                "FORGOT PASSWORD ERROR:",
+                repr(e)
+            )
+
+            flash(
+                f"Could not send the reset link: {str(e)}",
+                "danger"
+            )
+
     return render_template(
-        "register.html"
+        "forgot_password.html"
     )
+
+
+# ---------------------------------------------------------
+# RESET PASSWORD
+# ---------------------------------------------------------
+
+@app.route(
+    "/reset-password",
+    methods=["GET", "POST"]
+)
+def reset_password():
+
+    if request.method == "GET":
+
+        return render_template(
+            "reset_password.html"
+        )
+
+    password = request.form.get(
+        "password",
+        ""
+    )
+
+    confirm_password = request.form.get(
+        "confirm_password",
+        ""
+    )
+
+    access_token = request.form.get(
+        "access_token",
+        ""
+    )
+
+    refresh_token = request.form.get(
+        "refresh_token",
+        ""
+    )
+
+    if len(password) < 6:
+
+        flash(
+            "Password must contain at least 6 characters.",
+            "danger"
+        )
+
+        return render_template(
+            "reset_password.html"
+        )
+
+    if password != confirm_password:
+
+        flash(
+            "Passwords do not match.",
+            "danger"
+        )
+
+        return render_template(
+            "reset_password.html"
+        )
+
+    if not access_token or not refresh_token:
+
+        flash(
+            "The password reset link is invalid or expired. "
+            "Please request another reset link.",
+            "danger"
+        )
+
+        return redirect(
+            url_for("forgot_password")
+        )
+
+    try:
+
+        supabase = public_client()
+
+        # Establish the recovery user's Supabase session.
+        supabase.auth.set_session(
+            access_token,
+            refresh_token
+        )
+
+        supabase.auth.update_user({
+            "password": password
+        })
+
+        flash(
+            "Your password has been changed successfully. "
+            "You may now sign in.",
+            "success"
+        )
+
+        return redirect(
+            url_for("login")
+        )
+
+    except Exception as e:
+
+        print(
+            "RESET PASSWORD ERROR:",
+            repr(e)
+        )
+
+        flash(
+            f"Could not reset password: {str(e)}",
+            "danger"
+        )
+
+        return redirect(
+            url_for("forgot_password")
+        )
 
 
 # ---------------------------------------------------------
@@ -505,7 +584,6 @@ def dashboard():
     try:
 
         db = admin_client()
-
         profile = current_profile()
 
         if not profile:
@@ -521,9 +599,7 @@ def dashboard():
                 url_for("login")
             )
 
-        role = profile.get(
-            "role"
-        )
+        role = profile.get("role")
 
         stats = {}
 
@@ -634,26 +710,17 @@ def employees():
     if request.method == "POST":
 
         payload = {
-
             "employee_no":
-                request.form[
-                    "employee_no"
-                ],
+                request.form["employee_no"],
 
             "full_name":
-                request.form[
-                    "full_name"
-                ],
+                request.form["full_name"],
 
             "employee_type":
-                request.form[
-                    "employee_type"
-                ],
+                request.form["employee_type"],
 
             "department":
-                request.form.get(
-                    "department"
-                ),
+                request.form.get("department"),
 
             "monthly_salary":
                 float(
@@ -810,13 +877,9 @@ def dtr_upload():
                     continue
 
                 evaluation = evaluate_day(
-
                     row["work_date"],
-
                     row["time_in"],
-
                     row["time_out"],
-
                     standard_hours=(
                         employee[0].get(
                             "standard_hours"
@@ -826,41 +889,28 @@ def dtr_upload():
                 )
 
                 payload = {
-
                     "employee_id":
                         employee[0]["id"],
 
                     "work_date":
-                        row[
-                            "work_date"
-                        ].isoformat(),
+                        row["work_date"].isoformat(),
 
                     "time_in":
                         (
-                            row[
-                                "time_in"
-                            ].isoformat()
-                            if row[
-                                "time_in"
-                            ]
+                            row["time_in"].isoformat()
+                            if row["time_in"]
                             else None
                         ),
 
                     "time_out":
                         (
-                            row[
-                                "time_out"
-                            ].isoformat()
-                            if row[
-                                "time_out"
-                            ]
+                            row["time_out"].isoformat()
+                            if row["time_out"]
                             else None
                         ),
 
                     "status":
-                        evaluation[
-                            "status"
-                        ],
+                        evaluation["status"],
 
                     "payable_hours":
                         float(
@@ -870,9 +920,7 @@ def dtr_upload():
                         ),
 
                     "reason":
-                        evaluation[
-                            "reason"
-                        ],
+                        evaluation["reason"],
 
                     "requires_review":
                         evaluation[
@@ -884,9 +932,7 @@ def dtr_upload():
                 }
 
                 (
-                    db.table(
-                        "dtr_entries"
-                    )
+                    db.table("dtr_entries")
                     .upsert(
                         payload,
                         on_conflict=(
@@ -1005,7 +1051,6 @@ def payroll():
                     "payroll_runs"
                 )
                 .insert({
-
                     "start_date":
                         start,
 
@@ -1019,19 +1064,14 @@ def payroll():
                         "draft",
 
                     "created_by":
-                        session[
-                            "user_id"
-                        ]
-
+                        session["user_id"]
                 })
                 .execute()
                 .data[0]
             )
 
             employee_rows = (
-                db.table(
-                    "employees"
-                )
+                db.table("employees")
                 .select("*")
                 .eq(
                     "active",
@@ -1045,9 +1085,7 @@ def payroll():
             for employee in employee_rows:
 
                 dtr = (
-                    db.table(
-                        "dtr_entries"
-                    )
+                    db.table("dtr_entries")
                     .select("*")
                     .eq(
                         "employee_id",
@@ -1098,7 +1136,6 @@ def payroll():
                         "payroll_items"
                     )
                     .insert({
-
                         "payroll_run_id":
                             run["id"],
 
@@ -1106,9 +1143,7 @@ def payroll():
                             employee["id"],
 
                         "gross_pay":
-                            result[
-                                "gross_pay"
-                            ],
+                            result["gross_pay"],
 
                         "total_deductions":
                             result[
@@ -1116,9 +1151,7 @@ def payroll():
                             ],
 
                         "net_pay":
-                            result[
-                                "net_pay"
-                            ],
+                            result["net_pay"],
 
                         "attendance_summary":
                             {
@@ -1135,7 +1168,6 @@ def payroll():
                                         )
                                     )
                             }
-
                     })
                     .execute()
                     .data[0]
@@ -1150,7 +1182,6 @@ def payroll():
                             "payroll_item_deductions"
                         )
                         .insert({
-
                             "payroll_item_id":
                                 item["id"],
 
@@ -1174,7 +1205,6 @@ def payroll():
                                 deduction[
                                     "applied_amount"
                                 ]
-
                         })
                         .execute()
                     )
@@ -1201,9 +1231,7 @@ def payroll():
         )
 
     runs = (
-        db.table(
-            "payroll_runs"
-        )
+        db.table("payroll_runs")
         .select("*")
         .order(
             "created_at",
@@ -1238,9 +1266,7 @@ def payroll_run(run_id):
     db = admin_client()
 
     run = (
-        db.table(
-            "payroll_runs"
-        )
+        db.table("payroll_runs")
         .select("*")
         .eq(
             "id",
@@ -1252,9 +1278,7 @@ def payroll_run(run_id):
     )
 
     items = (
-        db.table(
-            "payroll_items"
-        )
+        db.table("payroll_items")
         .select(
             "*,employees("
             "employee_no,"
@@ -1296,23 +1320,17 @@ def approve_payroll(run_id):
 
         (
             admin_client()
-            .table(
-                "payroll_runs"
-            )
+            .table("payroll_runs")
             .update({
-
                 "status":
                     "approved",
 
                 "approved_by":
-                    session[
-                        "user_id"
-                    ],
+                    session["user_id"],
 
                 "approved_at":
                     datetime.utcnow()
                     .isoformat()
-
             })
             .eq(
                 "id",
@@ -1366,9 +1384,7 @@ def complaints():
     if profile["role"] == "employee":
 
         employee_rows = (
-            db.table(
-                "employees"
-            )
+            db.table("employees")
             .select("*")
             .eq(
                 "profile_id",
@@ -1382,9 +1398,7 @@ def complaints():
 
         if employee_rows:
 
-            employee = (
-                employee_rows[0]
-            )
+            employee = employee_rows[0]
 
     if request.method == "POST":
 
@@ -1421,11 +1435,8 @@ def complaints():
         try:
 
             complaint = (
-                db.table(
-                    "complaints"
-                )
+                db.table("complaints")
                 .insert({
-
                     "employee_id":
                         employee_id,
 
@@ -1444,15 +1455,14 @@ def complaints():
 
                     "status":
                         "submitted"
-
                 })
                 .execute()
                 .data[0]
             )
 
-            # -------------------------------
-            # RAG assessment
-            # -------------------------------
+            # ---------------------------------
+            # RAG ASSESSMENT
+            # ---------------------------------
 
             if assess_complaint:
 
@@ -1470,9 +1480,7 @@ def complaints():
                         tuple
                     ):
 
-                        assessment = (
-                            result[0]
-                        )
+                        assessment = result[0]
 
                         docs = (
                             result[1]
@@ -1482,10 +1490,7 @@ def complaints():
 
                     else:
 
-                        assessment = (
-                            result
-                        )
-
+                        assessment = result
                         docs = []
 
                     if isinstance(
@@ -1507,7 +1512,6 @@ def complaints():
                     db.table(
                         "complaint_assessments"
                     ).insert({
-
                         "complaint_id":
                             complaint["id"],
 
@@ -1517,8 +1521,7 @@ def complaints():
                         "retrieved_knowledge_ids":
                             [
                                 doc.get("id")
-                                for doc
-                                in docs
+                                for doc in docs
                                 if isinstance(
                                     doc,
                                     dict
@@ -1530,13 +1533,10 @@ def complaints():
                                 "HF_MODEL",
                                 "huggingface"
                             )
-
                     }).execute()
 
                     (
-                        db.table(
-                            "complaints"
-                        )
+                        db.table("complaints")
                         .update({
                             "status":
                                 "assessed"
@@ -1583,9 +1583,7 @@ def complaints():
         )
 
     query = (
-        db.table(
-            "complaints"
-        )
+        db.table("complaints")
         .select(
             "*,"
             "employees("
@@ -1626,9 +1624,7 @@ def complaints():
     ):
 
         employee_list = (
-            db.table(
-                "employees"
-            )
+            db.table("employees")
             .select(
                 "id,"
                 "employee_no,"
@@ -1659,7 +1655,7 @@ def complaints():
 # LOCAL RUN
 # ---------------------------------------------------------
 
-# Vercel detects this top-level variable:
+# Vercel finds this top-level variable:
 # app = Flask(__name__)
 
 if __name__ == "__main__":
