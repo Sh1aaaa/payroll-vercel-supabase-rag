@@ -1650,7 +1650,232 @@ def complaints():
         employee=employee
     )
 
+# ---------------------------------------------------------
+# INITIAL SUPER ADMIN SETUP
+# ---------------------------------------------------------
 
+@app.route(
+    "/setup-super-admin",
+    methods=["GET", "POST"]
+)
+def setup_super_admin():
+
+    # We don't want people directly browsing to this URL.
+    if request.method == "GET":
+        return redirect(url_for("login"))
+
+    try:
+        db = admin_client()
+
+        # -------------------------------------------------
+        # Check whether a Super Admin already exists
+        # -------------------------------------------------
+
+        existing_admin = (
+            db.table("profiles")
+            .select("id")
+            .eq("role", "super_admin")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+
+        if existing_admin:
+
+            flash(
+                "Super Admin setup is already disabled "
+                "because a Super Admin account exists.",
+                "warning"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        # -------------------------------------------------
+        # Read submitted information
+        # -------------------------------------------------
+
+        full_name = request.form.get(
+            "admin_full_name",
+            ""
+        ).strip()
+
+        email = request.form.get(
+            "admin_email",
+            ""
+        ).strip()
+
+        password = request.form.get(
+            "admin_password",
+            ""
+        )
+
+        confirm_password = request.form.get(
+            "admin_confirm_password",
+            ""
+        )
+
+        setup_secret = request.form.get(
+            "admin_setup_secret",
+            ""
+        )
+
+        # -------------------------------------------------
+        # Verify setup secret
+        # -------------------------------------------------
+
+        expected_secret = os.getenv(
+            "ADMIN_SETUP_SECRET"
+        )
+
+        if not expected_secret:
+
+            flash(
+                "Super Admin setup is not configured.",
+                "danger"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        # Use constant-time comparison for secret
+        import hmac
+
+        if not hmac.compare_digest(
+            setup_secret,
+            expected_secret
+        ):
+
+            flash(
+                "Invalid Super Admin setup code.",
+                "danger"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        # -------------------------------------------------
+        # Validation
+        # -------------------------------------------------
+
+        if not full_name:
+
+            flash(
+                "Please enter the administrator's full name.",
+                "danger"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        if not email:
+
+            flash(
+                "Please enter an email address.",
+                "danger"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        if len(password) < 8:
+
+            flash(
+                "Super Admin password must contain "
+                "at least 8 characters.",
+                "danger"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        if password != confirm_password:
+
+            flash(
+                "Super Admin passwords do not match.",
+                "danger"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        # -------------------------------------------------
+        # Create Supabase Auth account
+        # -------------------------------------------------
+
+        result = (
+            public_client()
+            .auth
+            .sign_up({
+                "email": email,
+                "password": password,
+                "options": {
+                    "data": {
+                        "full_name": full_name
+                    }
+                }
+            })
+        )
+
+        if not result.user:
+
+            flash(
+                "Could not create the Super Admin account.",
+                "danger"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        user_id = str(
+            result.user.id
+        )
+
+        # -------------------------------------------------
+        # Create / update profile
+        # -------------------------------------------------
+
+        db.table("profiles").upsert({
+            "id": user_id,
+            "full_name": full_name,
+            "role": "super_admin",
+            "approved": True
+        }).execute()
+
+        flash(
+            "Super Admin account created successfully. "
+            "You may now sign in.",
+            "success"
+        )
+
+        return redirect(
+            url_for("login")
+        )
+
+    except Exception as e:
+
+        print(
+            "SUPER ADMIN SETUP ERROR:",
+            repr(e)
+        )
+
+        flash(
+            f"Super Admin setup failed: {str(e)}",
+            "danger"
+        )
+
+        return redirect(
+            url_for("login")
+        )
 # ---------------------------------------------------------
 # LOCAL RUN
 # ---------------------------------------------------------
