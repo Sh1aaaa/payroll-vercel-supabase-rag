@@ -152,40 +152,35 @@ def login():
             supabase = public_client()
 
             auth_response = supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password
-            })
+    "email": email,
+    "password": password
+})
 
-            if not auth_response.user:
-                flash("Invalid email or password.", "error")
-                return render_template("login.html")
+if not auth_response.user:
+    flash("Invalid email or password.", "error")
+    return render_template("login.html")
 
-            user_id = str(auth_response.user.id)
+user_id = str(auth_response.user.id)
 
-            print("AUTH USER ID:", user_id)
+# PUT IT HERE ↓↓↓
 
-            # IMPORTANT:
-            # Use the SAME authenticated Supabase client.
-            # This allows the "profile reads self" RLS policy to work.
-            profile_response = (
-                supabase.table("profiles")
-                .select("id,full_name,role,approved")
-                .eq("id", user_id)
-                .execute()
-            )
+profile_response = (
+    supabase.table("profiles")
+    .select("id,full_name,role,approved")
+    .eq("id", user_id)
+    .execute()
+)
 
-            print("PROFILE RESULT:", profile_response.data)
+profiles = profile_response.data or []
 
-            profiles = profile_response.data or []
+if len(profiles) == 0:
+    flash(
+        f"Profile not found for user ID: {user_id}",
+        "error"
+    )
+    return render_template("login.html")
 
-            if len(profiles) == 0:
-                flash(
-                    f"Profile not found for user ID: {user_id}",
-                    "error"
-                )
-                return render_template("login.html")
-
-            profile = profiles[0]
+profile = profiles[0]
 
             if not profile.get("approved", False):
                 flash(
