@@ -1856,25 +1856,22 @@ def setup_super_admin():
 # Vercel finds this top-level variable:
 # app = Flask(__name__)
 
-@app.route("/debug-profile")
-def debug_profile():
+@app.route("/debug-supabase")
+def debug_supabase():
     try:
         db = admin_client()
 
         result = (
             db.table("profiles")
             .select("id,full_name,role,approved")
-            .eq(
-                "id",
-                "d51bc6e5-a078-49f8-a4d0-769f80e87472"
-            )
+            .eq("id", "d51bc6e5-a078-49f8-a4d0-769f80e87472")
             .execute()
         )
 
         return jsonify({
             "success": True,
-            "found": len(result.data or []) > 0,
-            "data": result.data
+            "profile_found": bool(result.data),
+            "profiles": result.data
         })
 
     except Exception as e:
