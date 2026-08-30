@@ -1855,7 +1855,6 @@ def setup_super_admin():
 
 # Vercel finds this top-level variable:
 # app = Flask(__name__)
-
 @app.route("/debug-supabase")
 def debug_supabase():
     try:
@@ -1879,3 +1878,11 @@ def debug_supabase():
             "success": False,
             "error": str(e)
         }), 500
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 5000)),
+        debug=True
+    )
