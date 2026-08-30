@@ -1,5 +1,6 @@
 import os
 import uuid
+import hmac
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from dotenv import load_dotenv
 
@@ -28,6 +29,113 @@ def health():
 @app.route("/")
 def index():
     return redirect(url_for("dashboard" if session.get("user_id") else "login"))
+
+
+# =========================================================
+# HIDDEN INITIAL SUPER ADMIN SETUP
+# Click the login logo/title 3 times to open this page.
+# Security is enforced SERVER-SIDE by ADMIN_SETUP_SECRET
+# and by allowing setup only when no Super Admin exists.
+# =========================================================
+
+@app.route("/setup-super-admin", methods=["GET", "POST"])
+def setup_super_admin():
+    expected_secret = os.getenv("ADMIN_SETUP_SECRET")
+
+    if not expected_secret:
+        flash("Super Admin setup is not configured.", "error")
+        return redirect(url_for("login"))
+
+    try:
+        db = admin_client()
+
+        existing_admin = (
+            db.table("profiles")
+            .select("id")
+            .eq("role", "super_admin")
+            .limit(1)
+            .execute()
+        )
+
+        # The bootstrap page is only available before the first Super Admin exists.
+        if existing_admin.data:
+            flash("A Super Admin already exists. Initial setup is disabled.", "warning")
+            return redirect(url_for("login"))
+
+    except Exception as e:
+        print("SUPER ADMIN CHECK ERROR:", repr(e))
+        flash(f"Could not verify Super Admin setup: {str(e)}", "error")
+        return redirect(url_for("login"))
+
+    if request.method == "POST":
+        full_name = request.form.get("full_name", "").strip()
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        submitted_secret = request.form.get("setup_secret", "")
+
+        if not full_name or not email or not password or not submitted_secret:
+            flash("All fields are required.", "error")
+            return render_template("setup_super_admin.html")
+
+        if len(password) < 8:
+            flash("Super Admin password must be at least 8 characters.", "error")
+            return render_template("setup_super_admin.html")
+
+        if password != confirm_password:
+            flash("Passwords do not match.", "error")
+            return render_template("setup_super_admin.html")
+
+        if not hmac.compare_digest(submitted_secret, expected_secret):
+            flash("Invalid setup secret.", "error")
+            return render_template("setup_super_admin.html")
+
+        try:
+            # Re-check immediately before creation to prevent a second bootstrap admin.
+            existing_admin = (
+                db.table("profiles")
+                .select("id")
+                .eq("role", "super_admin")
+                .limit(1)
+                .execute()
+            )
+
+            if existing_admin.data:
+                flash("A Super Admin already exists. Initial setup is disabled.", "warning")
+                return redirect(url_for("login"))
+
+            # Create the Auth user with the server-side admin API.
+            # This avoids relying on the normal public signup email flow.
+            auth_result = db.auth.admin.create_user({
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "full_name": full_name
+                }
+            })
+
+            user = auth_result.user
+            if not user:
+                raise RuntimeError("Supabase did not return the created user.")
+
+            user_id = str(user.id)
+
+            db.table("profiles").upsert({
+                "id": user_id,
+                "full_name": full_name,
+                "role": "super_admin",
+                "approved": True,
+            }).execute()
+
+            flash("Initial Super Admin created successfully. You can now sign in.", "success")
+            return redirect(url_for("login"))
+
+        except Exception as e:
+            print("SUPER ADMIN SETUP ERROR:", repr(e))
+            flash(f"Super Admin setup failed: {str(e)}", "error")
+
+    return render_template("setup_super_admin.html")
 
 
 @app.route("/login", methods=["GET", "POST"])
