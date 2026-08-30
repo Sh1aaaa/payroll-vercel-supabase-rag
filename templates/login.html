@@ -1,442 +1,59 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends 'base.html' %}
+{% block title %}Login - BulSU Payroll{% endblock %}
 
-<head>
-
-    <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <title>
-        BulSU Payroll Portal
-    </title>
-
-    <link
-        rel="stylesheet"
-        href="{{ url_for('static', filename='style.css') }}"
-    >
-
-</head>
-
-
-<body class="auth-page">
-
+{% block content %}
 <div class="auth-card">
 
-    <!--
-        Clicking this icon/title area 3 times reveals
-        the INITIAL Super Admin setup form.
-
-        IMPORTANT:
-        The setup secret is still verified by Flask.
-    -->
-
-    <div
-        id="adminTrigger"
-        style="cursor: default; user-select: none;"
-    >
-
-        <div class="auth-icon">
-            ⚖️
-        </div>
-
-        <h1>
-            BulSU Payroll Portal
-        </h1>
-
+    <div id="superAdminTrigger" class="hidden-admin-trigger" title="BulSU Payroll Portal">
+        <div class="auth-icon">⚖️</div>
+        <h1>BulSU Payroll Portal</h1>
     </div>
-
-
-    <!-- FLASH MESSAGES -->
-
-    {% with messages =
-        get_flashed_messages(
-            with_categories=true
-        )
-    %}
-
-        {% if messages %}
-
-            {% for category, message in messages %}
-
-                <div class="alert {{ category }}">
-                    {{ message }}
-                </div>
-
-            {% endfor %}
-
-        {% endif %}
-
-    {% endwith %}
-
-
-    <!-- =========================================
-         NORMAL LOGIN
-         ========================================= -->
 
     <form method="POST">
+        <label class="field-label">Email</label>
+        <input type="email" name="email" required>
 
-        <div class="form-group">
+        <label class="field-label">Password</label>
+        <input type="password" name="password" required>
 
-            <label>
-                Email
-            </label>
-
-            <input
-                type="email"
-                name="email"
-                required
-                autocomplete="email"
-            >
-
-        </div>
-
-
-        <div class="form-group">
-
-            <label>
-                Password
-            </label>
-
-            <div class="password-box">
-
-                <input
-                    type="password"
-                    name="password"
-                    id="loginPassword"
-                    required
-                    autocomplete="current-password"
-                >
-
-                <button
-                    type="button"
-                    class="show-password"
-                    onclick="
-                        togglePassword(
-                            'loginPassword',
-                            this
-                        )
-                    "
-                >
-                    Show
-                </button>
-
-            </div>
-
-        </div>
-
-
-        <button
-            type="submit"
-            class="auth-button"
-        >
+        <button class="btn btn-primary btn-block" type="submit">
             Verify Credentials
         </button>
-
     </form>
 
+    <a class="auth-link" href="{{ url_for('forgot_password') }}">Forgot Password?</a>
 
-    <div class="auth-links">
-
-        <a
-            href="{{ url_for('forgot_password') }}"
-        >
-            Forgot Password?
-        </a>
-
-        <p>
-
-            New employee?
-
-            <a
-                href="{{ url_for('register') }}"
-            >
-                Register Here
-            </a>
-
-        </p>
-
-    </div>
-
-
-    <!-- =========================================
-         HIDDEN SUPER ADMIN SETUP
-         ========================================= -->
-
-    <div
-        id="superAdminSetup"
-        style="display:none;"
-    >
-
-        <div
-            style="
-                border-top:1px solid #e1e5ed;
-                margin:30px 0 25px;
-            "
-        ></div>
-
-
-        <h2
-            style="
-                text-align:center;
-                color:#172451;
-                font-size:19px;
-                margin-bottom:22px;
-            "
-        >
-            Initial Super Admin Setup
-        </h2>
-
-
-        <form
-            method="POST"
-            action="{{ url_for('setup_super_admin') }}"
-        >
-
-            <div class="form-group">
-
-                <label>
-                    Full Name
-                </label>
-
-                <input
-                    type="text"
-                    name="admin_full_name"
-                    required
-                >
-
-            </div>
-
-
-            <div class="form-group">
-
-                <label>
-                    Email
-                </label>
-
-                <input
-                    type="email"
-                    name="admin_email"
-                    required
-                    autocomplete="email"
-                >
-
-            </div>
-
-
-            <div class="form-group">
-
-                <label>
-                    Password
-                </label>
-
-                <div class="password-box">
-
-                    <input
-                        type="password"
-                        name="admin_password"
-                        id="adminPassword"
-                        minlength="8"
-                        required
-                    >
-
-                    <button
-                        type="button"
-                        class="show-password"
-                        onclick="
-                            togglePassword(
-                                'adminPassword',
-                                this
-                            )
-                        "
-                    >
-                        Show
-                    </button>
-
-                </div>
-
-            </div>
-
-
-            <div class="form-group">
-
-                <label>
-                    Confirm Password
-                </label>
-
-                <div class="password-box">
-
-                    <input
-                        type="password"
-                        name="admin_confirm_password"
-                        id="adminConfirmPassword"
-                        minlength="8"
-                        required
-                    >
-
-                    <button
-                        type="button"
-                        class="show-password"
-                        onclick="
-                            togglePassword(
-                                'adminConfirmPassword',
-                                this
-                            )
-                        "
-                    >
-                        Show
-                    </button>
-
-                </div>
-
-            </div>
-
-
-            <div class="form-group">
-
-                <label>
-                    Admin Setup Code
-                </label>
-
-                <div class="password-box">
-
-                    <input
-                        type="password"
-                        name="admin_setup_secret"
-                        id="adminSetupSecret"
-                        required
-                        autocomplete="off"
-                    >
-
-                    <button
-                        type="button"
-                        class="show-password"
-                        onclick="
-                            togglePassword(
-                                'adminSetupSecret',
-                                this
-                            )
-                        "
-                    >
-                        Show
-                    </button>
-
-                </div>
-
-            </div>
-
-
-            <button
-                type="submit"
-                class="auth-button"
-            >
-                Create Super Admin
-            </button>
-
-        </form>
-
-    </div>
-
+    <p class="auth-bottom">
+        New employee?
+        <a href="{{ url_for('register') }}">Register Here</a>
+    </p>
 </div>
 
-
 <script>
+(function () {
+    const trigger = document.getElementById("superAdminTrigger");
+    if (!trigger) return;
 
-    /* -----------------------------------------
-       PASSWORD SHOW / HIDE
-       ----------------------------------------- */
+    let clicks = 0;
+    let resetTimer = null;
 
-    function togglePassword(id, button) {
+    trigger.addEventListener("click", function () {
+        clicks += 1;
 
-        const input =
-            document.getElementById(id);
-
-        if (input.type === "password") {
-
-            input.type = "text";
-            button.textContent = "Hide";
-
-        } else {
-
-            input.type = "password";
-            button.textContent = "Show";
-
+        if (resetTimer) {
+            clearTimeout(resetTimer);
         }
 
-    }
-
-
-    /* -----------------------------------------
-       3 CLICK ADMIN TRIGGER
-       ----------------------------------------- */
-
-    let adminClicks = 0;
-
-    let clickTimer = null;
-
-    const trigger =
-        document.getElementById(
-            "adminTrigger"
-        );
-
-    const setup =
-        document.getElementById(
-            "superAdminSetup"
-        );
-
-
-    trigger.addEventListener(
-        "click",
-        function () {
-
-            adminClicks++;
-
-            clearTimeout(
-                clickTimer
-            );
-
-
-            /*
-                User must click 3 times within
-                approximately 2 seconds.
-            */
-
-            clickTimer = setTimeout(
-                function () {
-
-                    adminClicks = 0;
-
-                },
-                2000
-            );
-
-
-            if (adminClicks >= 3) {
-
-                setup.style.display =
-                    "block";
-
-                adminClicks = 0;
-
-                clearTimeout(
-                    clickTimer
-                );
-
-                setup.scrollIntoView({
-                    behavior: "smooth",
-                    block: "center"
-                });
-
-            }
-
+        if (clicks >= 3) {
+            clicks = 0;
+            window.location.href = "{{ url_for('setup_super_admin') }}";
+            return;
         }
-    );
 
+        resetTimer = setTimeout(function () {
+            clicks = 0;
+        }, 1200);
+    });
+})();
 </script>
-
-</body>
-
-</html>
+{% endblock %}
