@@ -1,11 +1,11 @@
 import os
 import uuid
 import hmac
-from datetime import datetime
 
 from flask import (
     Flask,
     render_template,
+    render_template_string,
     request,
     redirect,
     url_for,
@@ -17,11 +17,7 @@ from flask import (
 from dotenv import load_dotenv
 
 from services.supabase_service import public_client, admin_client
-from services.auth_service import (
-    login_required,
-    role_required,
-    current_profile,
-)
+from services.auth_service import login_required, role_required, current_profile
 from services.dtr_service import parse_csv, evaluate_day
 from services.payroll_service import calculate
 
@@ -34,7 +30,7 @@ load_dotenv()
 
 
 # =========================================================
-# RAG SERVICE
+# RAG
 # =========================================================
 
 try:
@@ -46,7 +42,7 @@ except Exception as e:
 
 # =========================================================
 # FLASK APP
-# IMPORTANT: Vercel needs this top-level variable.
+# IMPORTANT: Vercel needs this at TOP LEVEL
 # =========================================================
 
 app = Flask(__name__)
@@ -58,7 +54,7 @@ app.secret_key = os.getenv(
 
 
 # =========================================================
-# HEALTH / DEBUG
+# HEALTH CHECK
 # =========================================================
 
 @app.route("/health")
@@ -68,6 +64,11 @@ def health():
         "app": "BulSU Payroll Portal"
     })
 
+
+# =========================================================
+# ENVIRONMENT TEST
+# Does NOT reveal secret values
+# =========================================================
 
 @app.route("/test-env")
 def test_env():
@@ -85,6 +86,10 @@ def test_env():
     })
 
 
+# =========================================================
+# DATABASE TEST
+# =========================================================
+
 @app.route("/test-db")
 def test_db():
     try:
@@ -100,7 +105,7 @@ def test_db():
         return jsonify({
             "success": True,
             "count": len(result.data or []),
-            "data": result.data or []
+            "profiles": result.data or []
         })
 
     except Exception as e:
@@ -111,18 +116,12 @@ def test_db():
 
 
 # =========================================================
-# TEMPORARY SUPABASE DEBUG
+# DEBUG SUPABASE PROFILE
+# TEMPORARY - REMOVE AFTER TROUBLESHOOTING
 # =========================================================
 
 @app.route("/debug-supabase")
 def debug_supabase():
-    """
-    Temporary diagnostic route.
-
-    Remove this route after login/profile troubleshooting
-    is finished.
-    """
-
     try:
         db = admin_client()
 
@@ -149,6 +148,15 @@ def debug_supabase():
 
 
 # =========================================================
+# VERSION TEST
+# =========================================================
+
+@app.route("/version-test")
+def version_test():
+    return "BulSU Payroll - NEW APP VERSION"
+
+
+# =========================================================
 # HOME
 # =========================================================
 
@@ -166,6 +174,7 @@ def index():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+
     if request.method == "POST":
 
         email = request.form.get("email", "").strip()
@@ -180,15 +189,17 @@ def login():
 
         try:
             # -------------------------------------------------
-            # Authenticate with Supabase
+            # AUTHENTICATE USER
             # -------------------------------------------------
 
             supabase = public_client()
 
-            auth_response = supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password
-            })
+            auth_response = (
+                supabase.auth.sign_in_with_password({
+                    "email": email,
+                    "password": password
+                })
+            )
 
             user = auth_response.user
 
@@ -201,16 +212,20 @@ def login():
 
             user_id = str(user.id)
 
-            print("LOGIN AUTH USER:", user_id)
-            print("LOGIN AUTH EMAIL:", user.email)
+            print("====================================")
+            print("AUTH LOGIN SUCCESS")
+            print("USER ID:", user_id)
+            print("EMAIL:", user.email)
+            print("====================================")
 
             # -------------------------------------------------
-            # Read profile using ADMIN CLIENT
+            # READ PROFILE
+            # Use admin client to avoid RLS problems.
             # -------------------------------------------------
 
             db = admin_client()
 
-            profile_result = (
+            profile_response = (
                 db.table("profiles")
                 .select("id,full_name,role,approved")
                 .eq("id", user_id)
@@ -219,11 +234,11 @@ def login():
             )
 
             print(
-                "LOGIN PROFILE RESULT:",
-                profile_result.data
+                "PROFILE QUERY RESULT:",
+                profile_response.data
             )
 
-            profiles = profile_result.data or []
+            profiles = profile_response.data or []
 
             if not profiles:
                 flash(
@@ -231,46 +246,59 @@ def login():
                     "but no profile record was found.",
                     "error"
                 )
+
                 return render_template("login.html")
 
             profile = profiles[0]
 
             # -------------------------------------------------
-            # Approval check
+            # APPROVAL CHECK
             # -------------------------------------------------
 
             if not profile.get("approved", False):
+
                 flash(
                     "Your account is still waiting for "
                     "Super Admin approval.",
                     "warning"
                 )
+
                 return render_template("login.html")
 
             # -------------------------------------------------
-            # Save session
+            # SESSION
             # -------------------------------------------------
 
             session.clear()
 
             session["user_id"] = user_id
             session["email"] = user.email
+
             session["full_name"] = (
                 profile.get("full_name") or ""
             )
+
             session["role"] = (
                 profile.get("role") or "employee"
             )
+
+            print("LOGIN ROLE:", session["role"])
 
             flash(
                 "Login successful.",
                 "success"
             )
 
-            return redirect(url_for("dashboard"))
+            return redirect(
+                url_for("dashboard")
+            )
 
         except Exception as e:
-            print("LOGIN ERROR:", repr(e))
+
+            print(
+                "LOGIN ERROR:",
+                repr(e)
+            )
 
             flash(
                 f"Login error: {str(e)}",
@@ -286,6 +314,7 @@ def login():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+
     if request.method == "POST":
 
         full_name = request.form.get(
@@ -329,13 +358,6 @@ def register():
             )
             return render_template("register.html")
 
-        if password != confirm_password:
-            flash(
-                "Passwords do not match.",
-                "error"
-            )
-            return render_template("register.html")
-
         if len(password) < 6:
             flash(
                 "Password must contain at least 6 characters.",
@@ -343,24 +365,33 @@ def register():
             )
             return render_template("register.html")
 
+        if password != confirm_password:
+            flash(
+                "Passwords do not match.",
+                "error"
+            )
+            return render_template("register.html")
+
         try:
             supabase = public_client()
 
-            response = supabase.auth.sign_up({
-                "email": email,
-                "password": password,
-                "options": {
-                    "data": {
-                        "full_name": full_name
+            auth_response = (
+                supabase.auth.sign_up({
+                    "email": email,
+                    "password": password,
+                    "options": {
+                        "data": {
+                            "full_name": full_name
+                        }
                     }
-                }
-            })
+                })
+            )
 
-            user = response.user
+            user = auth_response.user
 
             if not user:
                 flash(
-                    "Could not create the account.",
+                    "Could not create your account.",
                     "error"
                 )
                 return render_template("register.html")
@@ -368,12 +399,12 @@ def register():
             user_id = str(user.id)
 
             print(
-                "REGISTER USER ID:",
+                "REGISTERED AUTH USER:",
                 user_id
             )
 
             # -------------------------------------------------
-            # Ensure profile exists
+            # ENSURE PROFILE EXISTS
             # -------------------------------------------------
 
             try:
@@ -397,8 +428,9 @@ def register():
                     }).execute()
 
             except Exception as profile_error:
+
                 print(
-                    "PROFILE CREATE ERROR:",
+                    "PROFILE CREATION ERROR:",
                     repr(profile_error)
                 )
 
@@ -409,9 +441,12 @@ def register():
                 "success"
             )
 
-            return redirect(url_for("login"))
+            return redirect(
+                url_for("login")
+            )
 
         except Exception as e:
+
             print(
                 "REGISTER ERROR:",
                 repr(e)
@@ -426,30 +461,244 @@ def register():
 
 
 # =========================================================
+# FORGOT PASSWORD
+# This endpoint prevents login.html from crashing when
+# it contains url_for('forgot_password').
+# =========================================================
+
+@app.route(
+    "/forgot-password",
+    methods=["GET", "POST"]
+)
+def forgot_password():
+
+    if request.method == "POST":
+
+        email = request.form.get(
+            "email",
+            ""
+        ).strip()
+
+        if not email:
+
+            flash(
+                "Please enter your email address.",
+                "error"
+            )
+
+            return redirect(
+                url_for("forgot_password")
+            )
+
+        try:
+            supabase = public_client()
+
+            # Recovery email
+            supabase.auth.reset_password_for_email(
+                email,
+                options={
+                    "redirect_to": request.url_root.rstrip("/")
+                    + "/reset-password"
+                }
+            )
+
+            flash(
+                "If the email exists, password reset "
+                "instructions have been sent.",
+                "success"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        except Exception as e:
+
+            print(
+                "FORGOT PASSWORD ERROR:",
+                repr(e)
+            )
+
+            flash(
+                f"Could not send reset email: {str(e)}",
+                "error"
+            )
+
+    # If forgot_password.html exists, use it.
+    try:
+        return render_template(
+            "forgot_password.html"
+        )
+
+    except Exception:
+        # Safe fallback so missing template will NOT cause 500.
+        return render_template_string("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Forgot Password</title>
+            <meta name="viewport"
+                  content="width=device-width, initial-scale=1">
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    background: #f4f6fa;
+                    margin: 0;
+                    min-height: 100vh;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                }
+
+                .card {
+                    background: white;
+                    width: 360px;
+                    padding: 30px;
+                    border-radius: 10px;
+                    box-shadow: 0 8px 30px
+                        rgba(0,0,0,.08);
+                }
+
+                h2 {
+                    text-align: center;
+                    color: #101a44;
+                }
+
+                input {
+                    width: 100%;
+                    box-sizing: border-box;
+                    padding: 12px;
+                    margin-top: 8px;
+                    margin-bottom: 18px;
+                }
+
+                button {
+                    width: 100%;
+                    padding: 12px;
+                    background: #414fb3;
+                    color: white;
+                    border: 0;
+                    border-radius: 6px;
+                    cursor: pointer;
+                }
+
+                a {
+                    display: block;
+                    text-align: center;
+                    margin-top: 18px;
+                    text-decoration: none;
+                }
+            </style>
+        </head>
+
+        <body>
+
+            <div class="card">
+
+                <h2>BulSU Payroll Portal</h2>
+
+                {% with messages =
+                    get_flashed_messages(with_categories=true) %}
+
+                    {% for category, message in messages %}
+                        <p>{{ message }}</p>
+                    {% endfor %}
+
+                {% endwith %}
+
+                <form method="POST">
+
+                    <label>Email</label>
+
+                    <input
+                        type="email"
+                        name="email"
+                        required
+                    >
+
+                    <button type="submit">
+                        Send Reset Email
+                    </button>
+
+                </form>
+
+                <a href="{{ url_for('login') }}">
+                    Back to Login
+                </a>
+
+            </div>
+
+        </body>
+        </html>
+        """)
+
+
+# =========================================================
+# RESET PASSWORD
+# Placeholder endpoint so recovery redirect will not 404.
+# =========================================================
+
+@app.route(
+    "/reset-password",
+    methods=["GET", "POST"]
+)
+def reset_password():
+
+    return render_template_string("""
+    <!DOCTYPE html>
+
+    <html>
+
+    <head>
+
+        <title>Reset Password</title>
+
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1"
+        >
+
+    </head>
+
+    <body>
+
+        <h2>BulSU Payroll Portal</h2>
+
+        <p>
+            Password recovery link received.
+        </p>
+
+        <p>
+            Return to the login page after updating your
+            password through the Supabase recovery process.
+        </p>
+
+        <a href="{{ url_for('login') }}">
+            Return to Login
+        </a>
+
+    </body>
+
+    </html>
+    """)
+
+
+# =========================================================
 # LOGOUT
 # =========================================================
 
 @app.route("/logout")
 def logout():
 
-    try:
-        supabase = public_client()
-        supabase.auth.sign_out()
-    except Exception:
-        pass
-
     session.clear()
 
-    flash(
-        "You have been logged out.",
-        "success"
+    return redirect(
+        url_for("login")
     )
-
-    return redirect(url_for("login"))
 
 
 # =========================================================
-# ONE-TIME SUPER ADMIN SETUP
+# INITIAL SUPER ADMIN
 # =========================================================
 
 @app.route(
@@ -459,6 +708,7 @@ def logout():
 def setup_super_admin():
 
     if request.method == "GET":
+
         return render_template(
             "setup_super_admin.html"
         )
@@ -483,7 +733,7 @@ def setup_super_admin():
         ""
     )
 
-    setup_secret = request.form.get(
+    submitted_secret = request.form.get(
         "setup_secret",
         ""
     )
@@ -504,7 +754,7 @@ def setup_super_admin():
         )
 
     if not hmac.compare_digest(
-        setup_secret,
+        submitted_secret,
         expected_secret
     ):
 
@@ -542,10 +792,6 @@ def setup_super_admin():
     try:
         db = admin_client()
 
-        # -------------------------------------------------
-        # Only allow initial Super Admin
-        # -------------------------------------------------
-
         existing_admin = (
             db.table("profiles")
             .select("id")
@@ -558,36 +804,33 @@ def setup_super_admin():
 
             flash(
                 "A Super Admin already exists.",
-                "error"
+                "warning"
             )
 
             return redirect(
                 url_for("login")
             )
 
-        # -------------------------------------------------
-        # Create Supabase Auth account
-        # -------------------------------------------------
-
         supabase = public_client()
 
-        auth_response = supabase.auth.sign_up({
-            "email": email,
-            "password": password,
-            "options": {
-                "data": {
-                    "full_name": full_name
+        response = (
+            supabase.auth.sign_up({
+                "email": email,
+                "password": password,
+                "options": {
+                    "data": {
+                        "full_name": full_name
+                    }
                 }
-            }
-        })
+            })
+        )
 
-        user = auth_response.user
+        user = response.user
 
         if not user:
 
             flash(
-                "Could not create "
-                "Super Admin authentication account.",
+                "Could not create Super Admin account.",
                 "error"
             )
 
@@ -596,10 +839,6 @@ def setup_super_admin():
             )
 
         user_id = str(user.id)
-
-        # -------------------------------------------------
-        # Create/update profile
-        # -------------------------------------------------
 
         db.table("profiles").upsert({
             "id": user_id,
@@ -620,7 +859,7 @@ def setup_super_admin():
     except Exception as e:
 
         print(
-            "SUPER ADMIN SETUP ERROR:",
+            "SUPER ADMIN ERROR:",
             repr(e)
         )
 
@@ -642,30 +881,33 @@ def setup_super_admin():
 @login_required
 def dashboard():
 
-    profile = current_profile()
-
-    if not profile:
-
-        session.clear()
-
-        flash(
-            "Your profile could not be loaded. "
-            "Please sign in again.",
-            "error"
-        )
-
-        return redirect(
-            url_for("login")
-        )
-
-    role = profile.get(
-        "role",
-        "employee"
-    )
-
-    stats = {}
-
     try:
+        profile = current_profile()
+
+        if not profile:
+
+            session.clear()
+
+            flash(
+                "Your profile could not be loaded.",
+                "error"
+            )
+
+            return redirect(
+                url_for("login")
+            )
+
+        role = profile.get(
+            "role",
+            "employee"
+        )
+
+        stats = {
+            "employees": 0,
+            "flagged_dtr": 0,
+            "complaints": 0
+        }
+
         db = admin_client()
 
         if role in (
@@ -673,60 +915,91 @@ def dashboard():
             "hr"
         ):
 
-            employees_result = (
-                db.table("employees")
-                .select(
-                    "id",
-                    count="exact"
+            try:
+                response = (
+                    db.table("employees")
+                    .select(
+                        "id",
+                        count="exact"
+                    )
+                    .execute()
                 )
-                .execute()
-            )
 
-            stats["employees"] = (
-                employees_result.count or 0
-            )
-
-            flagged_result = (
-                db.table("dtr_entries")
-                .select(
-                    "id",
-                    count="exact"
+                stats["employees"] = (
+                    response.count or 0
                 )
-                .eq(
-                    "requires_review",
-                    True
+
+            except Exception as e:
+                print(
+                    "EMPLOYEE COUNT ERROR:",
+                    repr(e)
                 )
-                .execute()
-            )
 
-            stats["flagged_dtr"] = (
-                flagged_result.count or 0
-            )
-
-            complaints_result = (
-                db.table("complaints")
-                .select(
-                    "id",
-                    count="exact"
+            try:
+                response = (
+                    db.table("dtr_entries")
+                    .select(
+                        "id",
+                        count="exact"
+                    )
+                    .eq(
+                        "requires_review",
+                        True
+                    )
+                    .execute()
                 )
-                .execute()
-            )
 
-            stats["complaints"] = (
-                complaints_result.count or 0
-            )
+                stats["flagged_dtr"] = (
+                    response.count or 0
+                )
+
+            except Exception as e:
+                print(
+                    "DTR COUNT ERROR:",
+                    repr(e)
+                )
+
+            try:
+                response = (
+                    db.table("complaints")
+                    .select(
+                        "id",
+                        count="exact"
+                    )
+                    .execute()
+                )
+
+                stats["complaints"] = (
+                    response.count or 0
+                )
+
+            except Exception as e:
+                print(
+                    "COMPLAINT COUNT ERROR:",
+                    repr(e)
+                )
+
+        return render_template(
+            "dashboard.html",
+            profile=profile,
+            stats=stats
+        )
 
     except Exception as e:
+
         print(
             "DASHBOARD ERROR:",
             repr(e)
         )
 
-    return render_template(
-        "dashboard.html",
-        profile=profile,
-        stats=stats
-    )
+        flash(
+            f"Dashboard error: {str(e)}",
+            "error"
+        )
+
+        return redirect(
+            url_for("login")
+        )
 
 
 # =========================================================
@@ -749,85 +1022,76 @@ def employees():
     if request.method == "POST":
 
         try:
-            employee_no = request.form.get(
-                "employee_no",
-                ""
-            ).strip()
+            payload = {
+                "employee_no":
+                    request.form.get(
+                        "employee_no",
+                        ""
+                    ).strip(),
 
-            full_name = request.form.get(
-                "full_name",
-                ""
-            ).strip()
+                "full_name":
+                    request.form.get(
+                        "full_name",
+                        ""
+                    ).strip(),
 
-            employee_type = request.form.get(
-                "employee_type",
-                ""
-            ).strip()
+                "employee_type":
+                    request.form.get(
+                        "employee_type",
+                        ""
+                    ).strip(),
 
-            department = request.form.get(
-                "department",
-                ""
-            ).strip()
+                "department":
+                    request.form.get(
+                        "department",
+                        ""
+                    ).strip(),
 
-            monthly_salary_raw = (
-                request.form.get(
-                    "monthly_salary"
+                "active":
+                    True
+            }
+
+            monthly_salary = request.form.get(
+                "monthly_salary"
+            )
+
+            hourly_rate = request.form.get(
+                "hourly_rate"
+            )
+
+            standard_hours = request.form.get(
+                "standard_hours"
+            )
+
+            workdays = request.form.get(
+                "workdays_per_month"
+            )
+
+            if monthly_salary:
+                payload["monthly_salary"] = float(
+                    monthly_salary
                 )
-            )
 
-            hourly_rate_raw = (
-                request.form.get(
-                    "hourly_rate"
+            if hourly_rate:
+                payload["hourly_rate"] = float(
+                    hourly_rate
                 )
-            )
 
-            standard_hours_raw = (
-                request.form.get(
-                    "standard_hours"
-                )
-            )
-
-            workdays_raw = (
-                request.form.get(
-                    "workdays_per_month"
-                )
-            )
-
-            monthly_salary = (
-                float(monthly_salary_raw)
-                if monthly_salary_raw
-                else None
-            )
-
-            hourly_rate = (
-                float(hourly_rate_raw)
-                if hourly_rate_raw
-                else None
-            )
-
-            standard_hours = (
-                float(standard_hours_raw)
-                if standard_hours_raw
+            payload["standard_hours"] = (
+                float(standard_hours)
+                if standard_hours
                 else 8
             )
 
-            workdays_per_month = (
-                int(workdays_raw)
-                if workdays_raw
+            payload["workdays_per_month"] = (
+                int(workdays)
+                if workdays
                 else 22
             )
 
-            db.table("employees").insert({
-                "employee_no": employee_no,
-                "full_name": full_name,
-                "employee_type": employee_type,
-                "department": department,
-                "monthly_salary": monthly_salary,
-                "hourly_rate": hourly_rate,
-                "standard_hours": standard_hours,
-                "workdays_per_month": workdays_per_month,
-                "active": True,
-            }).execute()
+            db.table("employees").insert(
+                payload
+            ).execute()
 
             flash(
                 "Employee added successfully.",
@@ -841,7 +1105,7 @@ def employees():
         except Exception as e:
 
             print(
-                "EMPLOYEE CREATE ERROR:",
+                "ADD EMPLOYEE ERROR:",
                 repr(e)
             )
 
@@ -851,18 +1115,14 @@ def employees():
             )
 
     try:
-        result = (
+        response = (
             db.table("employees")
             .select("*")
-            .order(
-                "full_name"
-            )
+            .order("full_name")
             .execute()
         )
 
-        employee_rows = (
-            result.data or []
-        )
+        rows = response.data or []
 
     except Exception as e:
 
@@ -871,11 +1131,11 @@ def employees():
             repr(e)
         )
 
-        employee_rows = []
+        rows = []
 
     return render_template(
         "employees.html",
-        employees=employee_rows
+        employees=rows
     )
 
 
@@ -914,12 +1174,12 @@ def dtr_upload():
         try:
             db = admin_client()
 
-            batch_id = str(
-                uuid.uuid4()
-            )
-
             rows = parse_csv(
                 uploaded_file
+            )
+
+            batch_id = str(
+                uuid.uuid4()
             )
 
             imported = 0
@@ -938,7 +1198,7 @@ def dtr_upload():
                     skipped += 1
                     continue
 
-                employee_result = (
+                result = (
                     db.table("employees")
                     .select("*")
                     .eq(
@@ -949,13 +1209,11 @@ def dtr_upload():
                     .execute()
                 )
 
-                if not employee_result.data:
+                if not result.data:
                     skipped += 1
                     continue
 
-                employee = (
-                    employee_result.data[0]
-                )
+                employee = result.data[0]
 
                 evaluation = evaluate_day(
                     row
@@ -1003,7 +1261,7 @@ def dtr_upload():
                         ),
 
                     "import_batch":
-                        batch_id,
+                        batch_id
                 }
 
                 db.table(
@@ -1019,20 +1277,16 @@ def dtr_upload():
                 imported += 1
 
             flash(
-                f"DTR import completed. "
+                f"DTR import complete. "
                 f"{imported} imported, "
                 f"{skipped} skipped.",
                 "success"
             )
 
-            return redirect(
-                url_for("dtr_upload")
-            )
-
         except Exception as e:
 
             print(
-                "DTR IMPORT ERROR:",
+                "DTR ERROR:",
                 repr(e)
             )
 
@@ -1047,7 +1301,7 @@ def dtr_upload():
 
 
 # =========================================================
-# PAYROLL
+# PAYROLL LIST / GENERATE
 # =========================================================
 
 @app.route(
@@ -1077,15 +1331,10 @@ def payroll():
             "cutoff_no"
         )
 
-        if (
-            not start_date
-            or not end_date
-            or not cutoff_no
-        ):
+        if not start_date or not end_date or not cutoff_no:
 
             flash(
-                "Start date, end date and "
-                "cutoff are required.",
+                "Start date, end date and cutoff are required.",
                 "error"
             )
 
@@ -1094,7 +1343,7 @@ def payroll():
             )
 
         try:
-            run_response = (
+            response = (
                 db.table("payroll_runs")
                 .insert({
                     "start_date":
@@ -1112,34 +1361,28 @@ def payroll():
                     "created_by":
                         session.get(
                             "user_id"
-                        ),
+                        )
                 })
                 .execute()
             )
 
-            if not run_response.data:
+            if not response.data:
+
                 raise RuntimeError(
                     "Could not create payroll run."
                 )
 
-            payroll_run = (
-                run_response.data[0]
-            )
+            run_id = response.data[0]["id"]
 
-            run_id = payroll_run["id"]
-
-            employee_result = (
+            employees_result = (
                 db.table("employees")
                 .select("*")
-                .eq(
-                    "active",
-                    True
-                )
+                .eq("active", True)
                 .execute()
             )
 
             for employee in (
-                employee_result.data or []
+                employees_result.data or []
             ):
 
                 dtr_result = (
@@ -1160,7 +1403,7 @@ def payroll():
                     .execute()
                 )
 
-                deduction_result = (
+                deductions_result = (
                     db.table(
                         "employee_deductions"
                     )
@@ -1179,11 +1422,11 @@ def payroll():
                 calculation = calculate(
                     employee,
                     dtr_result.data or [],
-                    deduction_result.data or [],
+                    deductions_result.data or [],
                     int(cutoff_no)
                 )
 
-                item_response = (
+                item_result = (
                     db.table("payroll_items")
                     .insert({
                         "payroll_run_id":
@@ -1214,27 +1457,20 @@ def payroll():
                             calculation.get(
                                 "attendance_summary",
                                 {}
-                            ),
+                            )
                     })
                     .execute()
                 )
 
-                if (
-                    item_response.data
-                    and calculation.get(
-                        "deductions"
-                    )
-                ):
+                if item_result.data:
 
                     payroll_item_id = (
-                        item_response
-                        .data[0]["id"]
+                        item_result.data[0]["id"]
                     )
 
-                    for deduction in (
-                        calculation[
-                            "deductions"
-                        ]
+                    for deduction in calculation.get(
+                        "deductions",
+                        []
                     ):
 
                         db.table(
@@ -1258,7 +1494,7 @@ def payroll():
                                 deduction.get(
                                     "amount",
                                     0
-                                ),
+                                )
                         }).execute()
 
             flash(
@@ -1286,7 +1522,7 @@ def payroll():
             )
 
     try:
-        runs_result = (
+        result = (
             db.table("payroll_runs")
             .select("*")
             .order(
@@ -1296,9 +1532,7 @@ def payroll():
             .execute()
         )
 
-        runs = (
-            runs_result.data or []
-        )
+        runs = result.data or []
 
     except Exception as e:
 
@@ -1333,10 +1567,7 @@ def payroll_detail(run_id):
         run_result = (
             db.table("payroll_runs")
             .select("*")
-            .eq(
-                "id",
-                run_id
-            )
+            .eq("id", run_id)
             .limit(1)
             .execute()
         )
@@ -1352,10 +1583,6 @@ def payroll_detail(run_id):
                 url_for("payroll")
             )
 
-        payroll_run = (
-            run_result.data[0]
-        )
-
         items_result = (
             db.table("payroll_items")
             .select(
@@ -1370,7 +1597,7 @@ def payroll_detail(run_id):
 
         return render_template(
             "payroll_detail.html",
-            payroll_run=payroll_run,
+            payroll_run=run_result.data[0],
             items=items_result.data or []
         )
 
@@ -1392,7 +1619,7 @@ def payroll_detail(run_id):
 
 
 # =========================================================
-# PAYROLL APPROVAL
+# APPROVE PAYROLL
 # =========================================================
 
 @app.route(
@@ -1423,7 +1650,7 @@ def approve_payroll(run_id):
     except Exception as e:
 
         print(
-            "PAYROLL APPROVAL ERROR:",
+            "PAYROLL APPROVE ERROR:",
             repr(e)
         )
 
@@ -1474,35 +1701,29 @@ def complaints():
         try:
             assessment = None
 
-            # ---------------------------------------------
-            # RAG assessment
-            # ---------------------------------------------
-
             if assess_complaint:
 
                 try:
-                    assessment = (
-                        assess_complaint(
-                            complaint_text
-                        )
+                    assessment = assess_complaint(
+                        complaint_text
                     )
 
                 except Exception as rag_error:
 
                     print(
-                        "RAG ERROR:",
+                        "RAG ASSESSMENT ERROR:",
                         repr(rag_error)
                     )
 
                     assessment = (
-                        "RAG assessment is "
-                        "temporarily unavailable."
+                        "RAG assessment is temporarily "
+                        "unavailable."
                     )
 
             else:
 
                 assessment = (
-                    "RAG service is unavailable."
+                    "RAG service is currently unavailable."
                 )
 
             db.table(
@@ -1520,19 +1741,17 @@ def complaints():
                     assessment,
 
                 "status":
-                    "assessed"
-                    if assessment
-                    else "submitted",
+                    "assessed",
 
                 "model":
                     os.getenv(
                         "HF_MODEL",
                         "huggingface"
-                    ),
+                    )
             }).execute()
 
             flash(
-                "Complaint submitted successfully.",
+                "Complaint submitted.",
                 "success"
             )
 
@@ -1553,7 +1772,6 @@ def complaints():
             )
 
     try:
-
         profile = current_profile()
 
         if (
@@ -1610,33 +1828,10 @@ def complaints():
 
 
 # =========================================================
-# 404
-# =========================================================
-
-@app.errorhandler(404)
-def not_found(error):
-
-    return (
-        render_template(
-            "404.html"
-        )
-        if os.path.exists(
-            os.path.join(
-                app.template_folder,
-                "404.html"
-            )
-        )
-        else "Page not found",
-        404
-    )
-
-
-# =========================================================
-# LOCAL RUN
+# LOCAL DEVELOPMENT
 # =========================================================
 
 if __name__ == "__main__":
-
     app.run(
         host="0.0.0.0",
         port=int(
