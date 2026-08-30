@@ -1,1 +1,49 @@
-{% extends 'base.html' %}{% block content %}<h1>Payroll {{run.start_date}} - {{run.end_date}}</h1><p>Status: <b>{{run.status}}</b></p>{% if current_profile.role=='super_admin' and run.status=='draft' %}<form method="post" action="{{url_for('approve_payroll',run_id=run.id)}}"><button>Approve Payroll</button></form>{% endif %}<div class="card tablewrap"><table><tr><th>Employee</th><th>Type</th><th>Gross</th><th>Deductions</th><th>Net</th><th>Flagged DTR</th></tr>{% for i in items %}<tr><td>{{i.employees.employee_no}} - {{i.employees.full_name}}</td><td>{{i.employees.employee_type}}</td><td>₱{{'%.2f'|format(i.gross_pay)}}</td><td>₱{{'%.2f'|format(i.total_deductions)}}</td><td><b>₱{{'%.2f'|format(i.net_pay)}}</b></td><td>{{i.attendance_summary.flagged}}</td></tr>{% endfor %}</table></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Payroll Review - BulSU Payroll{% endblock %}
+{% block content %}
+<div class="role-dashboard">
+    <div class="dashboard-heading">
+        <h1>Payroll Review</h1>
+        <p>{{ payroll_run.start_date }} — {{ payroll_run.end_date }} · Cutoff {{ payroll_run.cutoff_no }}</p>
+    </div>
+
+    <section class="panel">
+        <div class="payroll-header-row">
+            <div>
+                {% if payroll_run.status == 'approved' %}
+                <span class="status status-approved">Approved</span>
+                {% else %}
+                <span class="status status-waiting">Pending Super Admin Approval</span>
+                {% endif %}
+            </div>
+
+            {% if profile.role == 'super_admin' and payroll_run.status != 'approved' %}
+            <form method="POST" action="{{ url_for('approve_payroll', run_id=payroll_run.id) }}"
+                  onsubmit="return confirm('Approve this payroll run?');">
+                <button class="btn btn-success" type="submit">✓ Authorize & Approve Payroll</button>
+            </form>
+            {% endif %}
+        </div>
+
+        {% if items %}
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead><tr><th>Employee</th><th>Gross Pay</th><th>Deductions</th><th>Net Pay</th></tr></thead>
+                <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{% if item.employees %}{{ item.employees.full_name }}{% else %}{{ item.employee_id }}{% endif %}</td>
+                    <td>{{ "%.2f"|format(item.gross_pay or 0) }}</td>
+                    <td>{{ "%.2f"|format(item.total_deductions or 0) }}</td>
+                    <td><b>{{ "%.2f"|format(item.net_pay or 0) }}</b></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">This payroll run has no items.</div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
