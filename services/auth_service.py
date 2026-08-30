@@ -5,11 +5,26 @@ from services.supabase_service import admin_client
 
 def current_profile():
     uid = session.get("user_id")
+
     if not uid:
         return None
-    res = admin_client().table("profiles").select("*").eq("id", uid).limit(1).execute()
-    return res.data[0] if res.data else None
 
+    try:
+        db = public_client()
+
+        res = (
+            db.table("profiles")
+            .select("*")
+            .eq("id", uid)
+            .limit(1)
+            .execute()
+        )
+
+        return res.data[0] if res.data else None
+
+    except Exception as e:
+        print("CURRENT PROFILE ERROR:", repr(e))
+        return None
 
 def login_required(fn):
     @wraps(fn)
