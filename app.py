@@ -148,7 +148,7 @@ def login():
             return render_template("login.html")
 
         try:
-            # Login using normal Supabase client
+            # Login to Supabase
             supabase = public_client()
 
             auth_response = supabase.auth.sign_in_with_password({
@@ -163,19 +163,18 @@ def login():
             user_id = str(auth_response.user.id)
 
             print("AUTH USER ID:", user_id)
-            print("AUTH EMAIL:", auth_response.user.email)
 
-            # IMPORTANT: profile lookup uses ADMIN client
-            db = admin_client()
-
+            # IMPORTANT:
+            # Use the SAME authenticated Supabase client.
+            # This allows the "profile reads self" RLS policy to work.
             profile_response = (
-                db.table("profiles")
+                supabase.table("profiles")
                 .select("id,full_name,role,approved")
                 .eq("id", user_id)
                 .execute()
             )
 
-            print("PROFILE QUERY RESULT:", profile_response.data)
+            print("PROFILE RESULT:", profile_response.data)
 
             profiles = profile_response.data or []
 
@@ -188,14 +187,14 @@ def login():
 
             profile = profiles[0]
 
-            if not profile.get("approved"):
+            if not profile.get("approved", False):
                 flash(
-                    "Your account is waiting for Super Admin approval.",
+                    "Your account is still waiting for Super Admin approval.",
                     "warning"
                 )
                 return render_template("login.html")
 
-            # Login successful
+            # Successful login
             session.clear()
 
             session["user_id"] = user_id
@@ -212,7 +211,6 @@ def login():
             flash(f"Login error: {str(e)}", "error")
 
     return render_template("login.html")
-
 
 # ---------------------------------------------------------
 # REGISTER
