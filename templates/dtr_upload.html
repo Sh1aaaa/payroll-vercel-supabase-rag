@@ -1,1 +1,18 @@
-{% extends 'base.html' %}{% block content %}<h1>DTR Import</h1><div class="card"><p>CSV columns: <code>employee_no, work_date, time_in, time_out</code>. Missing logout = zero pay for that day.</p><form method="post" enctype="multipart/form-data"><input type="file" name="file" accept=".csv" required><button>Import DTR</button></form></div><div class="card tablewrap"><table><tr><th>Date</th><th>Employee</th><th>In</th><th>Out</th><th>Status</th><th>Hours</th><th>Reason</th></tr>{% for r in rows %}<tr class="{% if r.requires_review %}flag{% endif %}"><td>{{r.work_date}}</td><td>{{r.employees.employee_no}} - {{r.employees.full_name}}</td><td>{{r.time_in or '-'}}</td><td>{{r.time_out or '-'}}</td><td>{{r.status}}</td><td>{{r.payable_hours}}</td><td>{{r.reason}}</td></tr>{% endfor %}</table></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Master DTR - BulSU Payroll{% endblock %}
+{% block content %}
+<div class="role-dashboard">
+    <div class="dashboard-heading">
+        <h1>Commit Master DTR CSV</h1>
+        <p>Super Admin only. These committed records are the attendance source for payroll generation.</p>
+    </div>
+    <section class="panel">
+        <form method="POST" enctype="multipart/form-data">
+            <label class="field-label">CSV file</label>
+            <input type="file" name="file" accept=".csv" required>
+            <div class="hint-box">Expected columns: <code>employee_no, work_date, time_in, time_out</code></div>
+            <button class="btn btn-primary" type="submit">Commit Master CSV Data</button>
+        </form>
+    </section>
+</div>
+{% endblock %}
