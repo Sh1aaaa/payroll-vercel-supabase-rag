@@ -17,7 +17,11 @@ from flask import (
 from dotenv import load_dotenv
 
 from services.supabase_service import public_client, admin_client
-from services.auth_service import login_required, role_required, current_profile
+from services.auth_service import (
+    login_required,
+    role_required,
+    current_profile,
+)
 from services.dtr_service import parse_csv, evaluate_day
 from services.payroll_service import calculate
 
