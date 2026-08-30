@@ -1,3 +1,56 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ title or 'Payroll System' }}</title><link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}"></head><body>
-<header><div><strong>Payroll + DTR + RAG</strong></div>{% if current_profile %}<nav><a href="{{url_for('dashboard')}}">Dashboard</a>{% if current_profile.role in ['super_admin','hr'] %}<a href="{{url_for('employees')}}">Employees</a><a href="{{url_for('dtr_upload')}}">DTR</a><a href="{{url_for('payroll')}}">Payroll</a>{% endif %}<a href="{{url_for('complaints')}}">Complaints</a><a href="{{url_for('logout')}}">Logout</a></nav>{% endif %}</header>
-<main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{% block content %}{% endblock %}</main></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}BulSU Payroll Portal{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% if session.get('user_id') %}
+<header class="topbar">
+    <div class="topbar-inner">
+        <a class="brand" href="{{ url_for('dashboard') }}">
+            <span>⚖️</span><span>BulSU Payroll Portal</span>
+        </a>
+
+        <nav class="nav-links">
+            <a href="{{ url_for('dashboard') }}">Dashboard</a>
+            {% if session.get('role') in ['super_admin', 'hr'] %}
+                <a href="{{ url_for('employees') }}">Employees</a>
+                <a href="{{ url_for('payroll') }}">Payroll</a>
+            {% endif %}
+            {% if session.get('role') == 'super_admin' %}
+                <a href="{{ url_for('dtr_upload') }}">Master DTR</a>
+            {% endif %}
+            <a href="{{ url_for('complaints') }}">Complaints</a>
+        </nav>
+
+        <div class="user-box">
+            <span>Welcome, <b>{{ session.get('full_name') or 'User' }}</b></span>
+            <span class="role-badge">
+                {% if session.get('role') == 'hr' %}Payroll Clerk
+                {% elif session.get('role') == 'super_admin' %}Super Admin
+                {% else %}Employee{% endif %}
+            </span>
+            <a href="{{ url_for('logout') }}">Logout</a>
+        </div>
+    </div>
+</header>
+{% endif %}
+
+<main class="{% if session.get('user_id') %}page-shell{% else %}auth-shell{% endif %}">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-wrap">
+            {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+</main>
+</body>
+</html>
