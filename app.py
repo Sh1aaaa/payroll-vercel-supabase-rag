@@ -139,97 +139,77 @@ def index():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-
     if request.method == "POST":
-
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
 
         if not email or not password:
-
-            flash(
-                "Please enter your email and password.",
-                "danger"
-            )
-
+            flash("Email and password are required.", "error")
             return render_template("login.html")
 
         try:
+            # Login using normal Supabase client
+            supabase = public_client()
 
-            result = (
-                public_client()
-                .auth
-                .sign_in_with_password({
-                    "email": email,
-                    "password": password
-                })
-            )
+            auth_response = supabase.auth.sign_in_with_password({
+                "email": email,
+                "password": password
+            })
 
-            if not result.user:
-
-                flash(
-                    "Invalid email or password.",
-                    "danger"
-                )
-
+            if not auth_response.user:
+                flash("Invalid email or password.", "error")
                 return render_template("login.html")
 
-            user_id = str(result.user.id)
+            user_id = str(auth_response.user.id)
 
+            print("AUTH USER ID:", user_id)
+            print("AUTH EMAIL:", auth_response.user.email)
+
+            # IMPORTANT: profile lookup uses ADMIN client
             db = admin_client()
 
-            profiles = (
+            profile_response = (
                 db.table("profiles")
-                .select("*")
+                .select("id,full_name,role,approved")
                 .eq("id", user_id)
-                .limit(1)
                 .execute()
-                .data
-                or []
             )
 
-            if not profiles:
+            print("PROFILE QUERY RESULT:", profile_response.data)
 
+            profiles = profile_response.data or []
+
+            if len(profiles) == 0:
                 flash(
-                    "Your authentication account exists, "
-                    "but no profile record was found.",
-                    "danger"
+                    f"Profile not found for user ID: {user_id}",
+                    "error"
                 )
-
                 return render_template("login.html")
 
             profile = profiles[0]
 
-            if not profile.get("approved", False):
-
+            if not profile.get("approved"):
                 flash(
                     "Your account is waiting for Super Admin approval.",
                     "warning"
                 )
-
                 return render_template("login.html")
 
+            # Login successful
             session.clear()
 
             session["user_id"] = user_id
-            session["email"] = result.user.email
-            session["role"] = profile.get("role")
+            session["email"] = auth_response.user.email
+            session["full_name"] = profile.get("full_name", "")
+            session["role"] = profile.get("role", "employee")
 
-            flash(
-                "Login successful.",
-                "success"
-            )
+            flash("Login successful.", "success")
 
             return redirect(url_for("dashboard"))
 
         except Exception as e:
-
             print("LOGIN ERROR:", repr(e))
-
-            flash(
-                f"Login error: {str(e)}",
-                "danger"
-            )
+            flash(f"Login error: {str(e)}", "error")
 
     return render_template("login.html")
 
