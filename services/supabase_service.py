@@ -7,9 +7,7 @@ def public_client():
     key = os.getenv("SUPABASE_ANON_KEY")
 
     if not url or not key:
-        raise RuntimeError(
-            "SUPABASE_URL or SUPABASE_ANON_KEY is missing"
-        )
+        raise RuntimeError("SUPABASE_URL or SUPABASE_ANON_KEY is missing")
 
     return create_client(url, key)
 
@@ -19,8 +17,6 @@ def admin_client():
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
     if not url or not key:
-        raise RuntimeError(
-            "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing"
-        )
+        raise RuntimeError("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing")
 
     return create_client(url, key)
