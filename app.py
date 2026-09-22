@@ -660,7 +660,7 @@ def complaints():
                 assessment = "RAG service is unavailable."
 
             db.table("complaints").insert({
-                "user_id": session.get("user_id"),
+                "employee_id": session.get("employee_id"),
                 "complaint": complaint_text,
                 "assessment": assessment,
                 "status": "assessed",
