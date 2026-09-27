@@ -1,159 +1,96 @@
-        )
+import os
+import uuid
+import hmac
 
-        flash(
-            f"Could not approve payroll: {str(e)}",
-            "error"
-        )
-
-
-    return redirect(
-        url_for(
-            "payroll_detail",
-            run_id=run_id
-        )
-    )
-
-
-# =========================================================
-# COMPLAINTS / RAG
-# =========================================================
-
-@app.route(
-    "/complaints",
-    methods=["GET", "POST"]
+from flask import (
+    Flask,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    flash,
+    session,
+    jsonify
 )
-@login_required
-def complaints():
 
-    db = admin_client()
+from dotenv import load_dotenv
 
-
-    if request.method == "POST":
-
-        complaint_text = request.form.get(
-            "complaint",
-            ""
-        ).strip()
-
-
-        if not complaint_text:
-
-            flash(
-                "Enter your complaint.",
-                "error"
-            )
-
-            return redirect(
-                url_for("complaints")
-            )
+from services.supabase_service import public_client, admin_client
+from services.auth_service import (
+    login_required,
+    role_required,
+    current_profile
+)
+from services.dtr_service import parse_csv, evaluate_day
+from services.payroll_service import calculate
 
 
-        try:
+# =========================================================
+# ENVIRONMENT
+# =========================================================
 
-            # -------------------------------------------------
-            # RAG ASSESSMENT
-            # -------------------------------------------------
-
-            if assess_complaint:
-
-                try:
-
-                    assessment = assess_complaint(
-                        complaint_text
-                    )
-
-                except Exception as rag_error:
-
-                    print(
-                        "RAG ASSESSMENT ERROR:",
-                        repr(rag_error)
-                    )
-
-                    assessment = (
-                        "RAG assessment is "
-                        "temporarily unavailable."
-                    )
-
-            else:
-
-                assessment = (
-                    "RAG service is unavailable."
-                )
+load_dotenv()
 
 
-            # -------------------------------------------------
-            # SAVE COMPLAINT
-            # -------------------------------------------------
+# =========================================================
+# OPTIONAL RAG SERVICE
+# =========================================================
 
-            db.table("complaints").insert({
-
-                "employee_id":
-                    session.get(
-                        "employee_id"
-                    ),
-
-                "complaint":
-                    complaint_text,
-
-                "assessment":
-                    assessment,
-
-                "status":
-                    "assessed"
-
-            }).execute()
+try:
+    from services.rag_service import assess_complaint
+except Exception as e:
+    print("RAG IMPORT ERROR:", repr(e))
+    assess_complaint = None
 
 
-            flash(
-                "Complaint submitted.",
-                "success"
-            )
+# =========================================================
+# FLASK APP
+# =========================================================
+
+app = Flask(__name__)
+
+app.secret_key = os.getenv(
+    "FLASK_SECRET_KEY",
+    "dev-only-change-this-secret"
+)
 
 
-            return redirect(
-                url_for("complaints")
-            )
+# =========================================================
+# HEALTH CHECK
+# =========================================================
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "app": "BulSU Payroll Portal"
+    })
 
 
-        except Exception as e:
+# =========================================================
+# HOME
+# =========================================================
 
-            print(
-                "COMPLAINT ERROR:",
-                repr(e)
-            )
+@app.route("/")
+def index():
 
-            flash(
-                f"Complaint submission failed: {str(e)}",
-                "error"
-            )
+    if session.get("user_id"):
+        return redirect(url_for("dashboard"))
 
-
-    # =====================================================
-    # LOAD COMPLAINTS
-    # =====================================================
-
-    profile = current_profile()
+    return redirect(url_for("login"))
 
 
-    try:
-
-        query = (
-            db.table("complaints")
-            .select("*")
-        )
-
-
-        if (
-            not profile
-            or profile.get("role")
-            not in (
-                "super_admin",
-                "hr"
-            )
-        ):
-
-            query = query.eq(
-                "user_id",
-                session.get("user_id")
-            )
-
+# =========================================================
+# STAFF REGISTRATION
+#
+# This is the hidden 3-click registration page.
+#
+# First account:
+#     Super Admin
+#     Requires ADMIN_SETUP_SECRET
+#     Automatically approved
+#
+# After first Super Admin:
+#     Payroll Clerk (hr)
+#     Super Admin
+#     Both require approval
