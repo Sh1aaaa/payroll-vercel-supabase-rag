@@ -1,17 +1,111 @@
 {% extends 'base.html' %}
+
 {% block title %}Register - BulSU Payroll{% endblock %}
+
 {% block content %}
+
 <div class="auth-card">
+
     <div class="auth-icon">⚖️</div>
+
     <h1>Employee Registration</h1>
-    <p class="auth-muted">Your account must be approved by the Super Admin before login.</p>
+
+    <p class="auth-muted">
+        Your account must be approved by the Super Admin before login.
+    </p>
+
+
     <form method="POST">
-        <label class="field-label">Full name</label><input type="text" name="full_name" required>
-        <label class="field-label">Email</label><input type="email" name="email" required>
-        <label class="field-label">Password</label><input type="password" name="password" minlength="6" required>
-        <label class="field-label">Confirm password</label><input type="password" name="confirm_password" minlength="6" required>
-        <button class="btn btn-primary btn-block" type="submit">Register</button>
+
+        <!-- FULL NAME -->
+        <label class="field-label">
+            Full Name
+        </label>
+
+        <input
+            type="text"
+            name="full_name"
+            value="{{ request.form.get('full_name', '') }}"
+            placeholder="Enter your full name"
+            required
+        >
+
+
+        <!-- SCHOOL / EMPLOYEE ID -->
+        <label class="field-label">
+            School / Employee ID
+        </label>
+
+        <input
+            type="text"
+            name="employee_id"
+            value="{{ request.form.get('employee_id', '') }}"
+            placeholder="Enter your School / Employee ID"
+            required
+        >
+
+        <small class="auth-muted">
+            Enter your official BulSU School / Employee ID.
+        </small>
+
+
+        <!-- EMAIL -->
+        <label class="field-label">
+            Email
+        </label>
+
+        <input
+            type="email"
+            name="email"
+            value="{{ request.form.get('email', '') }}"
+            placeholder="Enter your email"
+            required
+        >
+
+
+        <!-- PASSWORD -->
+        <label class="field-label">
+            Password
+        </label>
+
+        <input
+            type="password"
+            name="password"
+            minlength="6"
+            required
+        >
+
+
+        <!-- CONFIRM PASSWORD -->
+        <label class="field-label">
+            Confirm Password
+        </label>
+
+        <input
+            type="password"
+            name="confirm_password"
+            minlength="6"
+            required
+        >
+
+
+        <!-- REGISTER -->
+        <button
+            class="btn btn-primary btn-block"
+            type="submit"
+        >
+            Register
+        </button>
+
     </form>
-    <p class="auth-bottom"><a href="{{ url_for('login') }}">Back to Login</a></p>
+
+
+    <p class="auth-bottom">
+        <a href="{{ url_for('login') }}">
+            Back to Login
+        </a>
+    </p>
+
 </div>
+
 {% endblock %}
