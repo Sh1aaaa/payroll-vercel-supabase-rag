@@ -1,143 +1,509 @@
 {% extends 'base.html' %}
+
 {% block title %}Dashboard - BulSU Payroll{% endblock %}
 
 {% block content %}
+
 <div class="role-dashboard">
 
 {% if profile.role == 'super_admin' %}
+
     <div class="dashboard-heading">
         <h1>Super Admin Dashboard</h1>
-        <p>Approve employee registrations, commit official attendance data, and give final payroll approval.</p>
+        <p>
+            Approve employee and staff registrations, commit official attendance
+            data, and give final payroll approval.
+        </p>
     </div>
+
+
+    <!-- ========================= -->
+    <!-- STATISTICS -->
+    <!-- ========================= -->
 
     <div class="stats-grid">
-        <div class="stat-card"><span>Employees</span><strong>{{ stats.get('employees', 0) }}</strong></div>
-        <div class="stat-card"><span>Pending Registrations</span><strong>{{ stats.get('pending_accounts', 0) }}</strong></div>
-        <div class="stat-card"><span>Flagged DTR</span><strong>{{ stats.get('flagged_dtr', 0) }}</strong></div>
-        <div class="stat-card"><span>Payroll Awaiting Approval</span><strong>{{ stats.get('pending_payroll', 0) }}</strong></div>
+
+        <div class="stat-card">
+            <span>Employees</span>
+            <strong>{{ stats.get('employees', 0) }}</strong>
+        </div>
+
+        <div class="stat-card">
+            <span>Pending Registrations</span>
+            <strong>{{ stats.get('pending_accounts', 0) }}</strong>
+        </div>
+
+        <div class="stat-card">
+            <span>Flagged DTR</span>
+            <strong>{{ stats.get('flagged_dtr', 0) }}</strong>
+        </div>
+
+        <div class="stat-card">
+            <span>Payroll Awaiting Approval</span>
+            <strong>{{ stats.get('pending_payroll', 0) }}</strong>
+        </div>
+
     </div>
 
+
+    <!-- ========================= -->
+    <!-- REGISTRATION APPROVAL -->
+    <!-- ========================= -->
+
     <section class="panel">
-        <h2>Employee Registration Approval</h2>
-        <p>New employee accounts cannot log in until you approve them.</p>
+
+        <h2>Registration Approval</h2>
+
+        <p>
+            New employee and staff accounts cannot log in until a Super Admin
+            approves them.
+        </p>
+
 
         {% if pending_users %}
+
         <div class="table-wrap">
+
             <table class="data-table">
-                <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
+
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+
                 <tbody>
+
                 {% for user in pending_users %}
+
                 <tr>
-                    <td>{{ user.full_name or 'Unnamed User' }}</td>
-                    <td>Employee</td>
-                    <td><span class="status status-waiting">Pending</span></td>
-                    <td class="action-cell">
-                        <form method="POST" action="{{ url_for('approve_user', user_id=user.id) }}">
-                            <button class="btn btn-success" type="submit">Approve</button>
-                        </form>
-                        <form method="POST" action="{{ url_for('reject_user', user_id=user.id) }}"
-                              onsubmit="return confirm('Reject this registration?');">
-                            <button class="btn btn-danger" type="submit">Reject</button>
-                        </form>
+
+                    <!-- NAME -->
+                    <td>
+                        {{ user.full_name or 'Unnamed User' }}
                     </td>
+
+
+                    <!-- ROLE -->
+                    <td>
+
+                        {% if user.role == 'hr' %}
+
+                            <strong>Payroll Clerk</strong>
+
+                        {% elif user.role == 'super_admin' %}
+
+                            <strong>Super Admin</strong>
+
+                        {% elif user.role == 'employee' %}
+
+                            <strong>Employee</strong>
+
+                        {% else %}
+
+                            <strong>{{ user.role or 'Unknown' }}</strong>
+
+                        {% endif %}
+
+                    </td>
+
+
+                    <!-- STATUS -->
+                    <td>
+
+                        <span class="status status-waiting">
+                            Pending
+                        </span>
+
+                    </td>
+
+
+                    <!-- ACTIONS -->
+                    <td class="action-cell">
+
+                        <form
+                            method="POST"
+                            action="{{ url_for('approve_user', user_id=user.id) }}"
+                        >
+
+                            <button
+                                class="btn btn-success"
+                                type="submit"
+                            >
+                                Approve
+                            </button>
+
+                        </form>
+
+
+                        <form
+                            method="POST"
+                            action="{{ url_for('reject_user', user_id=user.id) }}"
+                            onsubmit="return confirm('Reject this registration?');"
+                        >
+
+                            <button
+                                class="btn btn-danger"
+                                type="submit"
+                            >
+                                Reject
+                            </button>
+
+                        </form>
+
+                    </td>
+
                 </tr>
+
                 {% endfor %}
+
                 </tbody>
+
             </table>
+
         </div>
+
         {% else %}
-            <div class="empty-state">No employee registrations are waiting for approval.</div>
+
+            <div class="empty-state">
+                No registrations are waiting for approval.
+            </div>
+
         {% endif %}
+
     </section>
 
+
+    <!-- ========================= -->
+    <!-- MASTER DTR -->
+    <!-- ========================= -->
+
     <section class="panel">
+
         <h2>Master Attendance Ledger Management</h2>
-        <p>Only the Super Admin can commit the official DTR CSV. The Payroll Clerk uses these records to generate payroll.</p>
-        <a class="btn btn-primary" href="{{ url_for('dtr_upload') }}">Commit Master DTR CSV</a>
+
+        <p>
+            Only the Super Admin can commit the official DTR CSV.
+            The Payroll Clerk uses these records to generate payroll.
+        </p>
+
+        <a
+            class="btn btn-primary"
+            href="{{ url_for('dtr_upload') }}"
+        >
+            Commit Master DTR CSV
+        </a>
+
     </section>
 
+
+    <!-- ========================= -->
+    <!-- PAYROLL APPROVAL -->
+    <!-- ========================= -->
+
     <section class="panel">
+
         <h2>Internal Control Approval Pipeline</h2>
-        <p>Payroll below was generated by the Payroll Clerk and is waiting for final Super Admin approval.</p>
+
+        <p>
+            Payroll below was generated by the Payroll Clerk and is waiting
+            for final Super Admin approval.
+        </p>
+
 
         {% if payroll_runs %}
+
         <div class="table-wrap">
+
             <table class="data-table">
-                <thead><tr><th>Period</th><th>Cutoff</th><th>Status</th><th>Review</th></tr></thead>
+
+                <thead>
+
+                    <tr>
+                        <th>Period</th>
+                        <th>Cutoff</th>
+                        <th>Status</th>
+                        <th>Review</th>
+                    </tr>
+
+                </thead>
+
+
                 <tbody>
+
                 {% for run in payroll_runs %}
+
                 <tr>
-                    <td>{{ run.start_date }} — {{ run.end_date }}</td>
-                    <td>{{ run.cutoff_no }}</td>
-                    <td><span class="status status-waiting">Pending Approval</span></td>
-                    <td><a class="btn btn-secondary" href="{{ url_for('payroll_detail', run_id=run.id) }}">Review Payroll</a></td>
+
+                    <td>
+                        {{ run.start_date }} — {{ run.end_date }}
+                    </td>
+
+                    <td>
+                        {{ run.cutoff_no }}
+                    </td>
+
+                    <td>
+
+                        {% if run.status == 'approved' %}
+
+                            <span class="status status-approved">
+                                Approved
+                            </span>
+
+                        {% else %}
+
+                            <span class="status status-waiting">
+                                Pending Approval
+                            </span>
+
+                        {% endif %}
+
+                    </td>
+
+                    <td>
+
+                        <a
+                            class="btn btn-secondary"
+                            href="{{ url_for('payroll_detail', run_id=run.id) }}"
+                        >
+                            Review Payroll
+                        </a>
+
+                    </td>
+
                 </tr>
+
                 {% endfor %}
+
                 </tbody>
+
             </table>
+
         </div>
+
         {% else %}
-            <div class="empty-state">No payroll is waiting for final approval.</div>
+
+            <div class="empty-state">
+                No payroll is waiting for final approval.
+            </div>
+
         {% endif %}
 
-        <a class="btn btn-dark btn-block" href="{{ url_for('payroll') }}">View All Payroll Records</a>
+
+        <a
+            class="btn btn-dark btn-block"
+            href="{{ url_for('payroll') }}"
+        >
+            View All Payroll Records
+        </a>
+
     </section>
+
+
+    <!-- ========================= -->
+    <!-- WORKFLOW -->
+    <!-- ========================= -->
 
     <div class="control-note">
-        <strong>Workflow:</strong> Super Admin commits DTR → Payroll Clerk generates payroll → Super Admin approves payroll.
+
+        <strong>Workflow:</strong>
+
+        Super Admin commits DTR
+        →
+        Payroll Clerk generates payroll
+        →
+        Super Admin approves payroll.
+
     </div>
+
 
 {% elif profile.role == 'hr' %}
+
+    <!-- ========================= -->
+    <!-- PAYROLL CLERK DASHBOARD -->
+    <!-- ========================= -->
+
     <div class="dashboard-heading">
+
         <h1>Payroll Clerk Dashboard</h1>
-        <p>Generate payroll using the official DTR already committed by the Super Admin.</p>
+
+        <p>
+            Generate payroll using the official DTR already committed by
+            the Super Admin.
+        </p>
+
     </div>
+
 
     <div class="stats-grid two">
-        <div class="stat-card"><span>Active Employees</span><strong>{{ stats.get('employees', 0) }}</strong></div>
-        <div class="stat-card"><span>Flagged DTR</span><strong>{{ stats.get('flagged_dtr', 0) }}</strong></div>
+
+        <div class="stat-card">
+
+            <span>Active Employees</span>
+
+            <strong>
+                {{ stats.get('employees', 0) }}
+            </strong>
+
+        </div>
+
+
+        <div class="stat-card">
+
+            <span>Flagged DTR</span>
+
+            <strong>
+                {{ stats.get('flagged_dtr', 0) }}
+            </strong>
+
+        </div>
+
     </div>
 
-    <section class="panel">
-        <h2>Payroll Processing</h2>
-        <p>You can generate payroll, but you cannot commit the Master DTR or give final payroll approval.</p>
-        <a class="btn btn-primary" href="{{ url_for('payroll') }}">Generate Payroll</a>
-    </section>
+
+    <!-- PAYROLL PROCESSING -->
 
     <section class="panel">
-        <h2>Recent Payroll Runs</h2>
-        {% if payroll_runs %}
-        <div class="table-wrap">
-            <table class="data-table">
-                <thead><tr><th>Period</th><th>Cutoff</th><th>Status</th><th></th></tr></thead>
-                <tbody>
-                {% for run in payroll_runs %}
-                <tr>
-                    <td>{{ run.start_date }} — {{ run.end_date }}</td>
-                    <td>{{ run.cutoff_no }}</td>
-                    <td>{{ 'Approved' if run.status == 'approved' else 'Pending Approval' }}</td>
-                    <td><a class="btn btn-secondary" href="{{ url_for('payroll_detail', run_id=run.id) }}">View</a></td>
-                </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-            <div class="empty-state">No payroll runs yet.</div>
-        {% endif %}
+
+        <h2>Payroll Processing</h2>
+
+        <p>
+            You can generate payroll, but you cannot commit the Master DTR
+            or give final payroll approval.
+        </p>
+
+        <a
+            class="btn btn-primary"
+            href="{{ url_for('payroll') }}"
+        >
+            Generate Payroll
+        </a>
+
     </section>
+
+
+    <!-- RECENT PAYROLL -->
+
+    <section class="panel">
+
+        <h2>Recent Payroll Runs</h2>
+
+
+        {% if payroll_runs %}
+
+        <div class="table-wrap">
+
+            <table class="data-table">
+
+                <thead>
+
+                    <tr>
+                        <th>Period</th>
+                        <th>Cutoff</th>
+                        <th>Status</th>
+                        <th></th>
+                    </tr>
+
+                </thead>
+
+
+                <tbody>
+
+                {% for run in payroll_runs %}
+
+                <tr>
+
+                    <td>
+                        {{ run.start_date }} — {{ run.end_date }}
+                    </td>
+
+                    <td>
+                        {{ run.cutoff_no }}
+                    </td>
+
+                    <td>
+
+                        {% if run.status == 'approved' %}
+
+                            Approved
+
+                        {% else %}
+
+                            Pending Approval
+
+                        {% endif %}
+
+                    </td>
+
+                    <td>
+
+                        <a
+                            class="btn btn-secondary"
+                            href="{{ url_for('payroll_detail', run_id=run.id) }}"
+                        >
+                            View
+                        </a>
+
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+        {% else %}
+
+            <div class="empty-state">
+                No payroll runs yet.
+            </div>
+
+        {% endif %}
+
+    </section>
+
 
 {% else %}
+
+    <!-- ========================= -->
+    <!-- EMPLOYEE DASHBOARD -->
+    <!-- ========================= -->
+
     <div class="dashboard-heading">
+
         <h1>Employee Dashboard</h1>
-        <p>Welcome, <b>{{ profile.full_name }}</b>.</p>
+
+        <p>
+            Welcome, <b>{{ profile.full_name }}</b>.
+        </p>
+
     </div>
 
+
     <section class="panel">
+
         <h2>Important DTR Rule</h2>
-        <p>If there is a time-in but no valid logout by <b>11:59 PM</b> on the same work date, payable hours are <b>0</b> and the day is flagged <code>NO_LOGOUT_NO_PAY</code>.</p>
+
+        <p>
+            If there is a time-in but no valid logout by
+            <b>11:59 PM</b> on the same work date, payable hours are
+            <b>0</b> and the day is flagged
+            <code>NO_LOGOUT_NO_PAY</code>.
+        </p>
+
     </section>
+
 {% endif %}
 
 </div>
+
 {% endblock %}
