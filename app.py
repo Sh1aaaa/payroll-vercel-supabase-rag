@@ -15,13 +15,22 @@ from flask import (
 
 from dotenv import load_dotenv
 
-from services.supabase_service import public_client, admin_client
+from services.supabase_service import (
+    public_client,
+    admin_client
+)
+
 from services.auth_service import (
     login_required,
     role_required,
     current_profile
 )
-from services.dtr_service import parse_csv, evaluate_day
+
+from services.dtr_service import (
+    parse_csv,
+    evaluate_day
+)
+
 from services.payroll_service import calculate
 
 
@@ -44,14 +53,14 @@ except Exception as e:
 
 
 # =========================================================
-# FLASK APP
+# FLASK APPLICATION
 # =========================================================
 
 app = Flask(__name__)
 
 app.secret_key = os.getenv(
     "FLASK_SECRET_KEY",
-    "dev-only-change-this-secret"
+    "change-this-secret"
 )
 
 
@@ -61,6 +70,7 @@ app.secret_key = os.getenv(
 
 @app.route("/health")
 def health():
+
     return jsonify({
         "status": "ok",
         "app": "BulSU Payroll Portal"
@@ -83,46 +93,4 @@ def index():
 # =========================================================
 # STAFF REGISTRATION
 #
-# This is the hidden 3-click registration page.
-#
-# First account:
-#     Super Admin
-#     Requires ADMIN_SETUP_SECRET
-#     Automatically approved
-#
-# After first Super Admin:
-#     Payroll Clerk (hr)
-#     Super Admin
-#     Both require approval
-#
-# Employee registration is handled separately by /register.
-# =========================================================
-
-@app.route("/staff-register", methods=["GET", "POST"])
-def staff_register():
-
-    db = admin_client()
-
-    # -----------------------------------------------------
-    # Check whether ANY Super Admin already exists
-    # -----------------------------------------------------
-
-    try:
-
-        existing_admin_result = (
-            db.table("profiles")
-            .select("id")
-            .eq("role", "super_admin")
-            .limit(1)
-            .execute()
-        )
-
-        has_super_admin = bool(
-            existing_admin_result.data
-        )
-
-    except Exception as e:
-
-        print(
-            "STAFF REGISTRATION ADMIN CHECK ERROR:",
-            repr(e)
+# Used by the hidden 3-click registration.
