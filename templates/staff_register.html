@@ -1,1 +1,333 @@
+{% extends "base.html" %}
 
+{% block content %}
+
+<div class="auth-page">
+    <div class="auth-card staff-register-card">
+
+        <!-- Header -->
+        <div class="auth-header">
+            <div class="auth-icon">⚖️</div>
+            <h1>Staff Registration</h1>
+            <p>BulSU Payroll Portal</p>
+        </div>
+
+        <!-- Error Message -->
+        {% if error %}
+        <div class="alert alert-error">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <!-- Information -->
+        {% if not has_super_admin %}
+        <div class="alert alert-info">
+            <strong>Initial Super Admin Setup</strong><br>
+            No Super Admin has been registered yet.
+            The first staff account must be a Super Admin.
+        </div>
+        {% else %}
+        <div class="alert alert-info">
+            <strong>Staff Account Registration</strong><br>
+            New staff accounts require approval from an existing Super Admin.
+        </div>
+        {% endif %}
+
+        <!-- Registration Form -->
+        <form method="POST" action="{{ url_for('staff_register') }}">
+
+            <!-- Full Name -->
+            <div class="form-group">
+                <label for="full_name">Full Name</label>
+                <input
+                    type="text"
+                    id="full_name"
+                    name="full_name"
+                    placeholder="Enter full name"
+                    value="{{ request.form.get('full_name', '') }}"
+                    required
+                >
+            </div>
+
+            <!-- Email -->
+            <div class="form-group">
+                <label for="email">Email Address</label>
+                <input
+                    type="email"
+                    id="email"
+                    name="email"
+                    placeholder="Enter email address"
+                    value="{{ request.form.get('email', '') }}"
+                    required
+                >
+            </div>
+
+            <!-- Password -->
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    placeholder="Enter password"
+                    minlength="6"
+                    required
+                >
+                <small>Minimum of 6 characters.</small>
+            </div>
+
+            <!-- Confirm Password -->
+            <div class="form-group">
+                <label for="confirm_password">Confirm Password</label>
+                <input
+                    type="password"
+                    id="confirm_password"
+                    name="confirm_password"
+                    placeholder="Confirm password"
+                    minlength="6"
+                    required
+                >
+            </div>
+
+            <!-- Role -->
+            <div class="form-group">
+                <label for="role">Account Type</label>
+
+                {% if not has_super_admin %}
+
+                    <!-- First account must be Super Admin -->
+                    <input type="hidden" name="role" value="super_admin">
+
+                    <div class="role-display">
+                        👑 Super Admin
+                    </div>
+
+                {% else %}
+
+                    <select id="role" name="role" required>
+                        <option value="" disabled
+                            {% if not request.form.get('role') %}selected{% endif %}>
+                            Select account type
+                        </option>
+
+                        <option value="hr"
+                            {% if request.form.get('role') == 'hr' %}selected{% endif %}>
+                            Payroll Clerk
+                        </option>
+
+                        <option value="super_admin"
+                            {% if request.form.get('role') == 'super_admin' %}selected{% endif %}>
+                            Super Admin
+                        </option>
+                    </select>
+
+                {% endif %}
+            </div>
+
+            <!-- Admin Secret -->
+            {% if not has_super_admin %}
+            <div class="form-group">
+                <label for="setup_secret">Admin Setup Secret</label>
+                <input
+                    type="password"
+                    id="setup_secret"
+                    name="setup_secret"
+                    placeholder="Enter setup secret"
+                    required
+                >
+                <small>
+                    Required only for the initial Super Admin account.
+                </small>
+            </div>
+            {% endif %}
+
+            <!-- Submit -->
+            <button type="submit" class="btn-primary">
+                {% if not has_super_admin %}
+                    Create Super Admin
+                {% else %}
+                    Register Staff Account
+                {% endif %}
+            </button>
+
+        </form>
+
+        <!-- Back to Login -->
+        <div class="auth-footer">
+            <p>
+                Already have an account?
+                <a href="{{ url_for('login') }}">Sign In</a>
+            </p>
+        </div>
+
+    </div>
+</div>
+
+
+<!-- Page-specific styling -->
+<style>
+    .auth-page {
+        min-height: calc(100vh - 70px);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 40px 20px;
+    }
+
+    .staff-register-card {
+        width: 100%;
+        max-width: 480px;
+        background: #ffffff;
+        border-radius: 14px;
+        padding: 32px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.10);
+    }
+
+    .auth-header {
+        text-align: center;
+        margin-bottom: 24px;
+    }
+
+    .auth-icon {
+        width: 58px;
+        height: 58px;
+        margin: 0 auto 12px;
+        border-radius: 50%;
+        background: #f1f5f9;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 28px;
+    }
+
+    .auth-header h1 {
+        margin: 0;
+        font-size: 25px;
+        color: #172554;
+    }
+
+    .auth-header p {
+        margin-top: 6px;
+        color: #64748b;
+        font-size: 14px;
+    }
+
+    .form-group {
+        margin-bottom: 18px;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 7px;
+        font-weight: 600;
+        color: #334155;
+        font-size: 14px;
+    }
+
+    .form-group input,
+    .form-group select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 12px 13px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #1e293b;
+        font-size: 14px;
+        outline: none;
+    }
+
+    .form-group input:focus,
+    .form-group select:focus {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .form-group small {
+        display: block;
+        margin-top: 5px;
+        color: #64748b;
+        font-size: 12px;
+    }
+
+    .role-display {
+        padding: 12px 13px;
+        border-radius: 8px;
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        color: #1e40af;
+        font-weight: 600;
+    }
+
+    .alert {
+        padding: 13px 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+
+    .alert-info {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        color: #1e40af;
+    }
+
+    .alert-error {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        color: #b91c1c;
+    }
+
+    .btn-primary {
+        width: 100%;
+        border: none;
+        border-radius: 8px;
+        padding: 13px;
+        background: #2563eb;
+        color: white;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: 0.2s;
+    }
+
+    .btn-primary:hover {
+        background: #1d4ed8;
+    }
+
+    .auth-footer {
+        text-align: center;
+        margin-top: 22px;
+        padding-top: 18px;
+        border-top: 1px solid #e2e8f0;
+    }
+
+    .auth-footer p {
+        margin: 0;
+        color: #64748b;
+        font-size: 14px;
+    }
+
+    .auth-footer a {
+        color: #2563eb;
+        font-weight: 600;
+        text-decoration: none;
+    }
+
+    .auth-footer a:hover {
+        text-decoration: underline;
+    }
+
+    @media (max-width: 600px) {
+        .auth-page {
+            padding: 20px 12px;
+        }
+
+        .staff-register-card {
+            padding: 24px 20px;
+        }
+    }
+</style>
+
+{% endblock %}
