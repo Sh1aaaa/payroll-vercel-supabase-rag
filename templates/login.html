@@ -1,59 +1,122 @@
 {% extends 'base.html' %}
+
 {% block title %}Login - BulSU Payroll{% endblock %}
 
 {% block content %}
+
 <div class="auth-card">
 
-    <div id="superAdminTrigger" class="hidden-admin-trigger" title="BulSU Payroll Portal">
+    <!-- Hidden 3-Click Staff Registration Trigger -->
+    <div id="superAdminTrigger"
+         class="hidden-admin-trigger"
+         title="BulSU Payroll Portal">
+
         <div class="auth-icon">⚖️</div>
+
         <h1>BulSU Payroll Portal</h1>
+
     </div>
 
+
+    <!-- Login Form -->
     <form method="POST">
+
         <label class="field-label">Email</label>
-        <input type="email" name="email" required>
+
+        <input
+            type="email"
+            name="email"
+            required
+            autocomplete="email"
+        >
+
 
         <label class="field-label">Password</label>
-        <input type="password" name="password" required>
 
-        <button class="btn btn-primary btn-block" type="submit">
+        <input
+            type="password"
+            name="password"
+            required
+            autocomplete="current-password"
+        >
+
+
+        <button
+            class="btn btn-primary btn-block"
+            type="submit">
             Verify Credentials
         </button>
+
     </form>
 
-    <a class="auth-link" href="{{ url_for('forgot_password') }}">Forgot Password?</a>
 
+    <!-- Forgot Password -->
+    <a
+        class="auth-link"
+        href="{{ url_for('forgot_password') }}">
+        Forgot Password?
+    </a>
+
+
+    <!-- Employee Registration -->
     <p class="auth-bottom">
         New employee?
-        <a href="{{ url_for('register') }}">Register Here</a>
+        <a href="{{ url_for('register') }}">
+            Register Here
+        </a>
     </p>
+
 </div>
+
+
+<!-- ========================================= -->
+<!-- HIDDEN 3-CLICK STAFF REGISTRATION -->
+<!-- ========================================= -->
 
 <script>
 (function () {
+
     const trigger = document.getElementById("superAdminTrigger");
+
     if (!trigger) return;
 
     let clicks = 0;
     let resetTimer = null;
 
+
     trigger.addEventListener("click", function () {
+
         clicks += 1;
 
+
+        // Clear previous reset timer
         if (resetTimer) {
             clearTimeout(resetTimer);
         }
 
+
+        // Three clicks
         if (clicks >= 3) {
+
             clicks = 0;
-            window.location.href = "{{ url_for('setup_super_admin') }}";
+
+            // Open staff registration
+            window.location.href = "{{ url_for('staff_register') }}";
+
             return;
         }
 
+
+        // Reset click counter after 1.2 seconds
         resetTimer = setTimeout(function () {
+
             clicks = 0;
+
         }, 1200);
+
     });
+
 })();
 </script>
+
 {% endblock %}
