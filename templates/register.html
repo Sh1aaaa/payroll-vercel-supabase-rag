@@ -49,6 +49,69 @@
         </small>
 
 
+        <!-- EMPLOYEE TYPE -->
+        <label class="field-label">
+            Employee Type
+        </label>
+
+        <select name="employee_type" required>
+
+            <option value="">
+                Select Employee Type
+            </option>
+
+            <option
+                value="regular"
+                {% if request.form.get('employee_type') == 'regular' %}selected{% endif %}
+            >
+                Regular
+            </option>
+
+            <option
+                value="temporary"
+                {% if request.form.get('employee_type') == 'temporary' %}selected{% endif %}
+            >
+                Temporary
+            </option>
+
+            <option
+                value="contractual"
+                {% if request.form.get('employee_type') == 'contractual' %}selected{% endif %}
+            >
+                Contractual
+            </option>
+
+            <option
+                value="casual"
+                {% if request.form.get('employee_type') == 'casual' %}selected{% endif %}
+            >
+                Casual
+            </option>
+
+            <option
+                value="ebjo"
+                {% if request.form.get('employee_type') == 'ebjo' %}selected{% endif %}
+            >
+                EBJO
+            </option>
+
+            <option
+                value="cos"
+                {% if request.form.get('employee_type') == 'cos' %}selected{% endif %}
+            >
+                COS
+            </option>
+
+            <option
+                value="part_time"
+                {% if request.form.get('employee_type') == 'part_time' %}selected{% endif %}
+            >
+                Part-Time
+            </option>
+
+        </select>
+
+
         <!-- EMAIL -->
         <label class="field-label">
             Email
