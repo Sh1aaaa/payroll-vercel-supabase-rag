@@ -1027,76 +1027,84 @@ def logout():
     )
 
 
-# =========================================================
-# DASHBOARD
-# =========================================================
+# =====================================================
+# EMPLOYEE DASHBOARD
+# =====================================================
 
-@app.route("/dashboard")
-@login_required
-def dashboard():
+else:
 
-    profile = current_profile()
+    employee = None
+    attendance_records = []
+    employee_payroll = []
 
+    try:
+        # Find the employee record linked to this account.
+        employee_result = (
+            db.table("employees")
+            .select("*")
+            .eq("profile_id", profile["id"])
+            .limit(1)
+            .execute()
+        )
 
-    if not profile:
+        if employee_result.data:
+            employee = employee_result.data[0]
 
-        session.clear()
+        # Load attendance belonging to this employee.
+        if employee:
+            attendance_records = (
+                db.table("dtr_entries")
+                .select("*")
+                .eq("employee_id", employee["id"])
+                .order("work_date", desc=True)
+                .execute()
+                .data or []
+            )
 
+            # Load payroll items belonging to this employee.
+            payroll_items = (
+                db.table("payroll_items")
+                .select("*")
+                .eq("employee_id", employee["id"])
+                .execute()
+                .data or []
+            )
+
+            # Attach the status and dates from each payroll run.
+            for item in payroll_items:
+                run_result = (
+                    db.table("payroll_runs")
+                    .select(
+                        "id, start_date, end_date, cutoff_no, status"
+                    )
+                    .eq("id", item["payroll_run_id"])
+                    .limit(1)
+                    .execute()
+                )
+
+                if run_result.data:
+                    item["payroll_run"] = run_result.data[0]
+                    employee_payroll.append(item)
+
+    except Exception as e:
+        print("EMPLOYEE DASHBOARD ERROR:", repr(e))
         flash(
-            "Your profile could not be loaded. "
-            "Please sign in again.",
+            "Some attendance or payroll records could not be loaded.",
             "error"
         )
 
-        return redirect(
-            url_for("login")
-        )
-
-
-    role = profile.get(
-        "role",
-        "employee"
+    return render_template(
+        "dashboard.html",
+        profile=profile,
+        stats=stats,
+        pending_users=pending_users,
+        payroll_runs=payroll_runs,
+        dtr_batches=dtr_batches,
+        selected_dtr_batch=selected_dtr_batch,
+        employee=employee,
+        attendance_records=attendance_records,
+        employee_payroll=employee_payroll
     )
-
-
-    db = admin_client()
-
-
-    stats = {
-
-        "employees":
-            0,
-
-        "pending_accounts":
-            0,
-
-        "flagged_dtr":
-            0,
-
-        "pending_payroll":
-            0
-
-    }
-
-
-    pending_users = []
-
-    payroll_runs = []
-
-    dtr_batches = []
-
-    selected_dtr_batch = (
-        session.get(
-            "selected_dtr_batch"
-        )
-    )
-
-
-    # =====================================================
-    # SUPER ADMIN
-    # =====================================================
-
-    if role == "super_admin":
 
         # -------------------------------------------------
         # EMPLOYEE COUNT
