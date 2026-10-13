@@ -2537,24 +2537,22 @@ def payroll():
     db = admin_client()
 
 
-    selected_dtr_batch = (
-        session.get(
-            "selected_dtr_batch"
-        )
+    # =====================================================
+    # CURRENTLY SELECTED MASTER DTR
+    # =====================================================
+
+    selected_dtr_batch = session.get(
+        "selected_dtr_batch"
     )
 
 
-    selected_dtr_start_date = (
-        session.get(
-            "selected_dtr_start_date"
-        )
+    selected_dtr_start_date = session.get(
+        "selected_dtr_start_date"
     )
 
 
-    selected_dtr_end_date = (
-        session.get(
-            "selected_dtr_end_date"
-        )
+    selected_dtr_end_date = session.get(
+        "selected_dtr_end_date"
     )
 
 
@@ -2565,7 +2563,7 @@ def payroll():
     if request.method == "POST":
 
         # -------------------------------------------------
-        # ONLY PAYROLL CLERK
+        # ONLY PAYROLL CLERK CAN GENERATE
         # -------------------------------------------------
 
         if role != "hr":
@@ -2581,7 +2579,7 @@ def payroll():
 
 
         # -------------------------------------------------
-        # SELECTED DTR REQUIRED
+        # MASTER DTR MUST BE SELECTED
         # -------------------------------------------------
 
         if not selected_dtr_batch:
@@ -2596,6 +2594,10 @@ def payroll():
                 url_for("dashboard")
             )
 
+
+        # -------------------------------------------------
+        # FORM DATA
+        # -------------------------------------------------
 
         start_date = request.form.get(
             "start_date"
@@ -2628,8 +2630,13 @@ def payroll():
 
         try:
 
+            cutoff_no = int(
+                cutoff_no
+            )
+
+
             # -------------------------------------------------
-            # VERIFY SELECTED BATCH
+            # VERIFY SELECTED DTR BATCH
             # -------------------------------------------------
 
             batch_check = (
@@ -2669,11 +2676,13 @@ def payroll():
                     None
                 )
 
+
                 flash(
                     "The selected Master DTR no longer exists. "
-                    "Please select another batch.",
+                    "Please select another DTR batch.",
                     "error"
                 )
+
 
                 return redirect(
                     url_for("dashboard")
@@ -2699,9 +2708,7 @@ def payroll():
                         end_date,
 
                     "cutoff_no":
-                        int(
-                            cutoff_no
-                        ),
+                        cutoff_no,
 
                     "status":
                         "draft",
@@ -2759,15 +2766,16 @@ def payroll():
 
 
             # -------------------------------------------------
-            # CALCULATE EACH EMPLOYEE
+            # PROCESS EVERY EMPLOYEE
             # -------------------------------------------------
 
             for employee in employee_rows:
 
 
-                # IMPORTANT:
-                # Payroll only reads the batch selected
-                # by the Payroll Clerk.
+                # =============================================
+                # GET DTR FOR THIS EMPLOYEE
+                # ONLY FROM SELECTED MASTER DTR
+                # =============================================
 
                 dtr_rows = (
 
@@ -2806,6 +2814,10 @@ def payroll():
                 )
 
 
+                # =============================================
+                # GET ACTIVE EMPLOYEE DEDUCTIONS
+                # =============================================
+
                 deductions = (
 
                     db.table(
@@ -2833,24 +2845,33 @@ def payroll():
                 )
 
 
+                # =============================================
+                # CALCULATE PAYROLL
+                #
+                # IMPORTANT:
+                # calculate() requires SIX arguments.
+                # =============================================
+
                 calculation = calculate(
 
                     employee,
 
+                    start_date,
+
+                    end_date,
+
+                    cutoff_no,
+
                     dtr_rows,
 
-                    deductions,
-
-                    int(
-                        cutoff_no
-                    )
+                    deductions
 
                 )
 
 
-                # -------------------------------------------------
-                # PAYROLL ITEM
-                # -------------------------------------------------
+                # =============================================
+                # SAVE PAYROLL ITEM
+                # =============================================
 
                 item_result = (
 
@@ -2884,11 +2905,19 @@ def payroll():
                                 0
                             ),
 
-                        "attendance_summary":
-                            calculation.get(
-                                "attendance_summary",
-                                {}
-                            )
+                        "attendance_summary": {
+                            "dtr_batch":
+                                selected_dtr_batch,
+
+                            "start_date":
+                                start_date,
+
+                            "end_date":
+                                end_date,
+
+                            "dtr_records":
+                                len(dtr_rows)
+                        }
 
                     })
 
@@ -2897,9 +2926,9 @@ def payroll():
                 )
 
 
-                # -------------------------------------------------
-                # SAVE DEDUCTIONS
-                # -------------------------------------------------
+                # =============================================
+                # SAVE APPLIED DEDUCTIONS
+                # =============================================
 
                 if item_result.data:
 
@@ -2910,47 +2939,49 @@ def payroll():
                     )
 
 
-                    for deduction in (
-                        calculation.get(
-                            "deductions",
-                            []
-                        )
+                    for deduction in calculation.get(
+                        "deductions",
+                        []
                     ):
 
-                        (
 
-                            db.table(
-                                "payroll_item_deductions"
-                            )
-
-                            .insert({
-
-                                "payroll_item_id":
-                                    item_id,
-
-                                "deduction_id":
-                                    deduction.get(
-                                        "id"
-                                    ),
-
-                                "name":
-                                    deduction.get(
-                                        "name",
-                                        ""
-                                    ),
-
-                                "amount":
-                                    deduction.get(
-                                        "amount",
-                                        0
-                                    )
-
-                            })
-
-                            .execute()
-
+                        applied_amount = deduction.get(
+                            "applied_amount",
+                            0
                         )
 
+
+                        if not applied_amount:
+                            continue
+
+
+                        db.table(
+                            "payroll_item_deductions"
+                        ).insert({
+
+                            "payroll_item_id":
+                                item_id,
+
+                            "deduction_id":
+                                deduction.get(
+                                    "id"
+                                ),
+
+                            "name":
+                                deduction.get(
+                                    "name",
+                                    ""
+                                ),
+
+                            "amount":
+                                applied_amount
+
+                        }).execute()
+
+
+            # -------------------------------------------------
+            # SUCCESS
+            # -------------------------------------------------
 
             flash(
                 "Payroll generated successfully. "
@@ -2973,6 +3004,7 @@ def payroll():
                 "PAYROLL GENERATION ERROR:",
                 repr(e)
             )
+
 
             flash(
                 f"Payroll generation failed: {str(e)}",
@@ -3017,6 +3049,10 @@ def payroll():
 
         runs = []
 
+
+    # =====================================================
+    # PAYROLL PAGE
+    # =====================================================
 
     return render_template(
 
