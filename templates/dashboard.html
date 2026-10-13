@@ -1,3 +1,4 @@
+
 {% extends 'base.html' %}
 
 {% block title %}Dashboard - BulSU Payroll{% endblock %}
@@ -13,12 +14,13 @@
     <div class="dashboard-heading">
         <h1>Super Admin Dashboard</h1>
         <p>
-            Approve employee and staff registrations, commit official attendance
-            data, and give final payroll approval.
+            Approve employee and staff registrations, commit official
+            attendance data, and give final payroll approval.
         </p>
     </div>
 
     <div class="stats-grid">
+
         <div class="stat-card">
             <span>Employees</span>
             <strong>{{ stats.get('employees', 0) }}</strong>
@@ -38,6 +40,7 @@
             <span>Payroll Awaiting Approval</span>
             <strong>{{ stats.get('pending_payroll', 0) }}</strong>
         </div>
+
     </div>
 
     <!-- REGISTRATION APPROVAL -->
@@ -46,16 +49,17 @@
         <h2>Registration Approval</h2>
 
         <p>
-            New employee and staff accounts cannot log in until a Super Admin
-            approves them.
+            New employee and staff accounts cannot log in until approved.
         </p>
 
         {% if pending_users %}
+
         <div class="table-wrap">
             <table class="data-table">
                 <thead>
                     <tr>
                         <th>Name</th>
+                        <th>Employee ID</th>
                         <th>Role</th>
                         <th>Status</th>
                         <th>Action</th>
@@ -65,41 +69,33 @@
                 <tbody>
                     {% for user in pending_users %}
                     <tr>
-                        <td>{{ user.full_name or 'Unnamed User' }}</td>
-
+                        <td>{{ user.get('full_name') or 'Unnamed User' }}</td>
+                        <td>{{ user.get('employee_id') or '-' }}</td>
                         <td>
-                            {% if user.role == 'hr' %}
-                                <strong>Payroll Clerk</strong>
-                            {% elif user.role == 'super_admin' %}
-                                <strong>Super Admin</strong>
-                            {% elif user.role == 'employee' %}
-                                <strong>Employee</strong>
+                            {% if user.get('role') == 'hr' %}
+                                Payroll Clerk
+                            {% elif user.get('role') == 'super_admin' %}
+                                Super Admin
+                            {% elif user.get('role') == 'employee' %}
+                                Employee
                             {% else %}
-                                <strong>{{ user.role or 'Unknown' }}</strong>
+                                {{ user.get('role') or 'Unknown' }}
                             {% endif %}
                         </td>
-
                         <td>
-                            <span class="status status-waiting">
-                                Pending
-                            </span>
+                            <span class="status status-waiting">Pending</span>
                         </td>
-
                         <td class="action-cell">
-                            <form
-                                method="POST"
-                                action="{{ url_for('approve_user', user_id=user.id) }}"
-                            >
+                            <form method="POST"
+                                  action="{{ url_for('approve_user', user_id=user.id) }}">
                                 <button class="btn btn-success" type="submit">
                                     Approve
                                 </button>
                             </form>
 
-                            <form
-                                method="POST"
-                                action="{{ url_for('reject_user', user_id=user.id) }}"
-                                onsubmit="return confirm('Reject this registration?');"
-                            >
+                            <form method="POST"
+                                  action="{{ url_for('reject_user', user_id=user.id) }}"
+                                  onsubmit="return confirm('Reject this registration?');">
                                 <button class="btn btn-danger" type="submit">
                                     Reject
                                 </button>
@@ -110,6 +106,7 @@
                 </tbody>
             </table>
         </div>
+
         {% else %}
             <div class="empty-state">
                 No registrations are waiting for approval.
@@ -117,14 +114,13 @@
         {% endif %}
     </section>
 
-    <!-- MASTER DTR MANAGEMENT -->
+    <!-- MASTER DTR -->
 
     <section class="panel">
         <h2>Master Attendance Ledger Management</h2>
 
         <p>
-            Only the Super Admin can commit the official DTR CSV.
-            The Payroll Clerk uses these records to generate payroll.
+            Commit the official DTR CSV for payroll processing.
         </p>
 
         <a class="btn btn-primary" href="{{ url_for('dtr_upload') }}">
@@ -138,11 +134,11 @@
         <h2>Internal Control Approval Pipeline</h2>
 
         <p>
-            Payroll below was generated by the Payroll Clerk and is waiting
-            for final Super Admin approval.
+            Review payroll generated by the Payroll Clerk.
         </p>
 
         {% if payroll_runs %}
+
         <div class="table-wrap">
             <table class="data-table">
                 <thead>
@@ -158,13 +154,15 @@
                     {% for run in payroll_runs %}
                     <tr>
                         <td>
-                            {{ run.start_date }} — {{ run.end_date }}
+                            {{ run.get('start_date', '-') }}
+                            —
+                            {{ run.get('end_date', '-') }}
                         </td>
 
-                        <td>{{ run.cutoff_no }}</td>
+                        <td>{{ run.get('cutoff_no', '-') }}</td>
 
                         <td>
-                            {% if run.status == 'approved' %}
+                            {% if run.get('status') == 'approved' %}
                                 <span class="status status-approved">
                                     Approved
                                 </span>
@@ -176,10 +174,8 @@
                         </td>
 
                         <td>
-                            <a
-                                class="btn btn-secondary"
-                                href="{{ url_for('payroll_detail', run_id=run.id) }}"
-                            >
+                            <a class="btn btn-secondary"
+                               href="{{ url_for('payroll_detail', run_id=run.id) }}">
                                 Review Payroll
                             </a>
                         </td>
@@ -188,9 +184,10 @@
                 </tbody>
             </table>
         </div>
+
         {% else %}
             <div class="empty-state">
-                No payroll is waiting for final approval.
+                No payroll runs are available for review.
             </div>
         {% endif %}
 
@@ -212,10 +209,9 @@
 
     <div class="dashboard-heading">
         <h1>Payroll Clerk Dashboard</h1>
-
         <p>
-            Generate payroll using the official DTR already committed by
-            the Super Admin.
+            Generate payroll using the official DTR committed by the
+            Super Admin.
         </p>
     </div>
 
@@ -231,15 +227,246 @@
         </div>
     </div>
 
-    <!-- AVAILABLE MASTER DTR -->
-
     <section class="panel">
-        <h2>Available Master DTR</h2>
+        <h2>Payroll Processing</h2>
 
         <p>
-            Select the official attendance batch committed by the Super Admin
-            before generating payroll.
+            Generate payroll, but leave final approval to the Super Admin.
         </p>
 
-        {% if dtr_batches %}
-        <div class="table
+        <a class="btn btn-primary" href="{{ url_for('payroll') }}">
+            Generate Payroll
+        </a>
+    </section>
+
+    <section class="panel">
+        <h2>Recent Payroll Runs</h2>
+
+        {% if payroll_runs %}
+
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Period</th>
+                        <th>Cutoff</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for run in payroll_runs %}
+                    <tr>
+                        <td>
+                            {{ run.get('start_date', '-') }}
+                            —
+                            {{ run.get('end_date', '-') }}
+                        </td>
+                        <td>{{ run.get('cutoff_no', '-') }}</td>
+                        <td>
+                            {% if run.get('status') == 'approved' %}
+                                <span class="status status-approved">
+                                    Approved
+                                </span>
+                            {% else %}
+                                <span class="status status-waiting">
+                                    Pending Approval
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a class="btn btn-secondary"
+                               href="{{ url_for('payroll_detail', run_id=run.id) }}">
+                                View
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% else %}
+            <div class="empty-state">No payroll runs yet.</div>
+        {% endif %}
+    </section>
+
+
+{% else %}
+
+    <!-- EMPLOYEE DASHBOARD -->
+
+    <div class="dashboard-heading">
+        <h1>Employee Dashboard</h1>
+        <p>
+            Welcome, <strong>{{ profile.get('full_name', 'Employee') }}</strong>.
+        </p>
+    </div>
+
+    <!-- EMPLOYEE INFORMATION -->
+
+    <section class="panel">
+        <h2>My Employee Information</h2>
+
+        {% if employee %}
+        <div class="stats-grid two">
+            <div class="stat-card">
+                <span>Employee Number</span>
+                <strong>{{ employee.get('employee_no', '-') }}</strong>
+            </div>
+
+            <div class="stat-card">
+                <span>Employee Type</span>
+                <strong>{{ employee.get('employee_type', '-')|title }}</strong>
+            </div>
+        </div>
+        {% else %}
+            <div class="empty-state">
+                Your employee record could not be matched to your account.
+                Please contact the Payroll Clerk or Super Admin.
+            </div>
+        {% endif %}
+    </section>
+
+    <!-- DTR RULE -->
+
+    <section class="panel">
+        <h2>Important DTR Rule</h2>
+
+        <p>
+            If there is a time-in but no valid time-out by
+            <strong>11:59 PM</strong> on the same work date, payable hours
+            are <strong>0</strong> and the day is flagged
+            <code>NO_LOGOUT_NO_PAY</code>.
+        </p>
+    </section>
+
+    <!-- MY ATTENDANCE -->
+
+    <section class="panel">
+        <h2>My Attendance</h2>
+
+        <p>
+            Review your recorded Daily Time Record (DTR).
+        </p>
+
+        {% if attendance_records %}
+
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Work Date</th>
+                        <th>Time In</th>
+                        <th>Time Out</th>
+                        <th>Payable Hours</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for record in attendance_records %}
+                    <tr>
+                        <td>{{ record.get('work_date', '-') or '-' }}</td>
+                        <td>{{ record.get('time_in', '-') or '-' }}</td>
+                        <td>{{ record.get('time_out', '-') or '-' }}</td>
+                        <td>{{ record.get('payable_hours', 0) or 0 }}</td>
+                        <td>
+                            {% if record.get('requires_review') %}
+                                <span class="status status-waiting">
+                                    For Review
+                                </span>
+                            {% elif record.get('status') %}
+                                {{ record.get('status') }}
+                            {% else %}
+                                Recorded
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% else %}
+            <div class="empty-state">
+                No attendance records were found for your employee account.
+            </div>
+        {% endif %}
+    </section>
+
+    <!-- MY PAYROLL -->
+
+    <section class="panel">
+        <h2>My Payroll</h2>
+
+        <p>
+            Only payroll runs approved by the Super Admin appear here.
+        </p>
+
+        {% if employee_payroll %}
+
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Payroll Period</th>
+                        <th>Cutoff</th>
+                        <th>Gross Pay</th>
+                        <th>Deductions</th>
+                        <th>Net Pay</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for item in employee_payroll %}
+                    {% set run = item.get('payroll_run', {}) %}
+
+                    <tr>
+                        <td>
+                            {{ run.get('start_date', '-') }}
+                            —
+                            {{ run.get('end_date', '-') }}
+                        </td>
+
+                        <td>{{ run.get('cutoff_no', '-') }}</td>
+
+                        <td>
+                            ₱{{ "%.2f"|format(item.get('gross_pay', 0)|float) }}
+                        </td>
+
+                        <td>
+                            ₱{{ "%.2f"|format(item.get('total_deductions', 0)|float) }}
+                        </td>
+
+                        <td>
+                            <strong>
+                                ₱{{ "%.2f"|format(item.get('net_pay', 0)|float) }}
+                            </strong>
+                        </td>
+
+                        <td>
+                            <span class="status status-approved">
+                                Approved
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% else %}
+            <div class="empty-state">
+                No approved payroll records are available yet.
+            </div>
+        {% endif %}
+    </section>
+
+{% endif %}
+
+</div>
+
+{% endblock %}
