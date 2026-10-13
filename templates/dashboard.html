@@ -315,6 +315,8 @@
 
         Super Admin commits DTR
         →
+        Payroll Clerk selects DTR
+        →
         Payroll Clerk generates payroll
         →
         Super Admin approves payroll.
@@ -366,28 +368,156 @@
     </div>
 
 
+    <!-- ========================= -->
+    <!-- AVAILABLE MASTER DTR -->
+    <!-- ========================= -->
+
+    <section class="panel">
+
+        <h2>Available Master DTR</h2>
+
+        <p>
+            Select the official attendance batch committed by the Super Admin
+            before generating payroll.
+        </p>
+
+        {% if dtr_batches %}
+
+        <div class="table-wrap">
+
+            <table class="data-table">
+
+                <thead>
+
+                    <tr>
+                        <th>Attendance Period</th>
+                        <th>Records</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+
+                </thead>
+
+                <tbody>
+
+                {% for batch in dtr_batches %}
+
+                <tr>
+
+                    <td>
+                        {{ batch.start_date or 'Unknown' }}
+                        —
+                        {{ batch.end_date or 'Unknown' }}
+                    </td>
+
+                    <td>
+                        {{ batch.records }}
+                    </td>
+
+                    <td>
+
+                        {% if selected_dtr_batch == batch.id %}
+
+                            <span class="status status-approved">
+                                Selected
+                            </span>
+
+                        {% else %}
+
+                            <span class="status status-waiting">
+                                Available
+                            </span>
+
+                        {% endif %}
+
+                    </td>
+
+                    <td>
+
+                        <form
+                            method="POST"
+                            action="{{ url_for('select_dtr_batch', batch_id=batch.id) }}"
+                        >
+
+                            <button
+                                class="btn btn-secondary"
+                                type="submit"
+                            >
+
+                                {% if selected_dtr_batch == batch.id %}
+                                    Selected
+                                {% else %}
+                                    Use for Payroll
+                                {% endif %}
+
+                            </button>
+
+                        </form>
+
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+        {% else %}
+
+            <div class="empty-state">
+                No Master DTR has been committed by the Super Admin yet.
+            </div>
+
+        {% endif %}
+
+    </section>
+
+
+    <!-- ========================= -->
     <!-- PAYROLL PROCESSING -->
+    <!-- ========================= -->
 
     <section class="panel">
 
         <h2>Payroll Processing</h2>
 
         <p>
-            You can generate payroll, but you cannot commit the Master DTR
-            or give final payroll approval.
+            You can generate payroll using the selected Master DTR,
+            but you cannot commit attendance or give final payroll approval.
         </p>
 
-        <a
-            class="btn btn-primary"
-            href="{{ url_for('payroll') }}"
-        >
-            Generate Payroll
-        </a>
+
+        {% if selected_dtr_batch %}
+
+            <a
+                class="btn btn-primary"
+                href="{{ url_for('payroll') }}"
+            >
+                Generate Payroll Using Selected DTR
+            </a>
+
+        {% else %}
+
+            <button
+                class="btn btn-primary"
+                type="button"
+                disabled
+            >
+                Select a Master DTR First
+            </button>
+
+        {% endif %}
 
     </section>
 
 
+    <!-- ========================= -->
     <!-- RECENT PAYROLL -->
+    <!-- ========================= -->
 
     <section class="panel">
 
@@ -430,11 +560,15 @@
 
                         {% if run.status == 'approved' %}
 
-                            Approved
+                            <span class="status status-approved">
+                                Approved
+                            </span>
 
                         {% else %}
 
-                            Pending Approval
+                            <span class="status status-waiting">
+                                Pending Approval
+                            </span>
 
                         {% endif %}
 
