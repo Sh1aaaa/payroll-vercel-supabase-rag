@@ -405,7 +405,9 @@
             Only payroll runs approved by the Super Admin appear here.
         </p>
 
-        {% if employee_payroll %}
+        {% set approved_payroll = employee_payroll|default([])|selectattr("payroll_run.status", "equalto", "approved")|list %}
+
+        {% if approved_payroll %}
 
         <div class="table-wrap">
             <table class="data-table">
@@ -421,7 +423,7 @@
                 </thead>
 
                 <tbody>
-                    {% for item in employee_payroll %}
+                    {% for item in approved_payroll %}
                     {% set run = item.get('payroll_run', {}) %}
 
                     <tr>
