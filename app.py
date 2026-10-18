@@ -1027,71 +1027,151 @@ def logout():
     )
 
 
-# =====================================================
-# EMPLOYEE DASHBOARD
-# =====================================================
+# =========================================================
+# DASHBOARD
+# =========================================================
 
-else:
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    profile = current_profile()
+    if not profile:
+        session.clear()
+        return redirect(url_for("login"))
 
+    db = admin_client()
+    role = profile.get("role", "employee")
+    stats = {
+        "employees": 0,
+        "pending_accounts": 0,
+        "flagged_dtr": 0,
+        "pending_payroll": 0,
+    }
+    pending_users = []
+    payroll_runs = []
+    dtr_batches = []
+    selected_dtr_batch = session.get("selected_dtr_batch")
     employee = None
     attendance_records = []
     employee_payroll = []
 
-    try:
-        # Find the employee record linked to this account.
-        employee_result = (
-            db.table("employees")
-            .select("*")
-            .eq("profile_id", profile["id"])
-            .limit(1)
-            .execute()
-        )
+    if role in ("super_admin", "hr"):
+        try:
+            result = (
+                db.table("employees").select("id", count="exact")
+                .eq("active", True).execute()
+            )
+            stats["employees"] = result.count or 0
+        except Exception:
+            app.logger.exception("EMPLOYEE COUNT ERROR")
 
-        if employee_result.data:
-            employee = employee_result.data[0]
+        try:
+            result = (
+                db.table("dtr_entries").select("id", count="exact")
+                .eq("requires_review", True).execute()
+            )
+            stats["flagged_dtr"] = result.count or 0
+        except Exception:
+            app.logger.exception("FLAGGED DTR ERROR")
 
-        # Load attendance belonging to this employee.
-        if employee:
-            attendance_records = (
+    if role == "super_admin":
+        try:
+            pending_users = (
+                db.table("profiles")
+                .select("id,full_name,employee_id,role,approved,created_at")
+                .eq("approved", False)
+                .order("created_at").execute().data or []
+            )
+            stats["pending_accounts"] = len(pending_users)
+        except Exception:
+            app.logger.exception("PENDING USER ERROR")
+
+        try:
+            payroll_runs = (
+                db.table("payroll_runs").select("*")
+                .eq("status", "draft")
+                .order("created_at", desc=True).execute().data or []
+            )
+            stats["pending_payroll"] = len(payroll_runs)
+        except Exception:
+            app.logger.exception("PENDING PAYROLL ERROR")
+
+    elif role == "hr":
+        try:
+            dtr_rows = (
                 db.table("dtr_entries")
-                .select("*")
-                .eq("employee_id", employee["id"])
-                .order("work_date", desc=True)
-                .execute()
-                .data or []
+                .select("import_batch,work_date")
+                .order("work_date").execute().data or []
             )
-
-            # Load payroll items belonging to this employee.
-            payroll_items = (
-                db.table("payroll_items")
-                .select("*")
-                .eq("employee_id", employee["id"])
-                .execute()
-                .data or []
+            grouped = {}
+            for row in dtr_rows:
+                batch_id = row.get("import_batch")
+                work_date = row.get("work_date")
+                if not batch_id:
+                    continue
+                if batch_id not in grouped:
+                    grouped[batch_id] = {
+                        "id": batch_id,
+                        "start_date": work_date,
+                        "end_date": work_date,
+                        "records": 0,
+                    }
+                batch = grouped[batch_id]
+                batch["records"] += 1
+                if work_date:
+                    if not batch["start_date"] or work_date < batch["start_date"]:
+                        batch["start_date"] = work_date
+                    if not batch["end_date"] or work_date > batch["end_date"]:
+                        batch["end_date"] = work_date
+            dtr_batches = sorted(
+                grouped.values(),
+                key=lambda batch: batch.get("start_date") or "",
+                reverse=True,
             )
+        except Exception:
+            app.logger.exception("DTR BATCH LOAD ERROR")
 
-            # Attach the status and dates from each payroll run.
-            for item in payroll_items:
-                run_result = (
-                    db.table("payroll_runs")
-                    .select(
-                        "id, start_date, end_date, cutoff_no, status"
-                    )
-                    .eq("id", item["payroll_run_id"])
-                    .limit(1)
-                    .execute()
+        try:
+            payroll_runs = (
+                db.table("payroll_runs").select("*")
+                .order("created_at", desc=True).limit(10)
+                .execute().data or []
+            )
+        except Exception:
+            app.logger.exception("CLERK PAYROLL ERROR")
+
+    else:
+        try:
+            result = (
+                db.table("employees").select("*")
+                .eq("profile_id", profile["id"])
+                .limit(1).execute()
+            )
+            if result.data:
+                employee = result.data[0]
+            if employee:
+                attendance_records = (
+                    db.table("dtr_entries").select("*")
+                    .eq("employee_id", employee["id"])
+                    .order("work_date", desc=True).execute().data or []
                 )
-
-                if run_result.data:
-                    item["payroll_run"] = run_result.data[0]
-                    employee_payroll.append(item)
-
-    except Exception as e:
-        print("EMPLOYEE DASHBOARD ERROR:", repr(e))
-        flash(
-            "Some attendance or payroll records could not be loaded.",
-            "error"
-        )
+                payroll_items = (
+                    db.table("payroll_items").select("*")
+                    .eq("employee_id", employee["id"]).execute().data or []
+                )
+                for item in payroll_items:
+                    run_result = (
+                        db.table("payroll_runs")
+                        .select("id,start_date,end_date,cutoff_no,status")
+                        .eq("id", item["payroll_run_id"])
+                        .limit(1).execute()
+                    )
+                    if run_result.data:
+                        item["payroll_run"] = run_result.data[0]
+                        employee_payroll.append(item)
+        except Exception:
+            app.logger.exception("EMPLOYEE DASHBOARD ERROR")
+            flash("Some attendance or payroll records could not be loaded.", "error")
 
     return render_template(
         "dashboard.html",
@@ -1103,476 +1183,7 @@ else:
         selected_dtr_batch=selected_dtr_batch,
         employee=employee,
         attendance_records=attendance_records,
-        employee_payroll=employee_payroll
-    )
-
-        # -------------------------------------------------
-        # EMPLOYEE COUNT
-        # -------------------------------------------------
-
-        try:
-
-            result = (
-
-                db.table("employees")
-
-                .select(
-                    "id",
-                    count="exact"
-                )
-
-                .eq(
-                    "active",
-                    True
-                )
-
-                .execute()
-
-            )
-
-
-            stats["employees"] = (
-                result.count
-                or 0
-            )
-
-
-        except Exception as e:
-
-            print(
-                "EMPLOYEE COUNT ERROR:",
-                repr(e)
-            )
-
-
-        # -------------------------------------------------
-        # PENDING REGISTRATIONS
-        # -------------------------------------------------
-
-        try:
-
-            result = (
-
-                db.table("profiles")
-
-                .select(
-                    "id,"
-                    "full_name,"
-                    "employee_id,"
-                    "role,"
-                    "approved,"
-                    "created_at"
-                )
-
-                .eq(
-                    "approved",
-                    False
-                )
-
-                .order(
-                    "created_at"
-                )
-
-                .execute()
-
-            )
-
-
-            pending_users = (
-                result.data
-                or []
-            )
-
-
-            stats["pending_accounts"] = (
-                len(
-                    pending_users
-                )
-            )
-
-
-        except Exception as e:
-
-            print(
-                "PENDING USER ERROR:",
-                repr(e)
-            )
-
-
-        # -------------------------------------------------
-        # FLAGGED DTR
-        # -------------------------------------------------
-
-        try:
-
-            result = (
-
-                db.table("dtr_entries")
-
-                .select(
-                    "id",
-                    count="exact"
-                )
-
-                .eq(
-                    "requires_review",
-                    True
-                )
-
-                .execute()
-
-            )
-
-
-            stats["flagged_dtr"] = (
-                result.count
-                or 0
-            )
-
-
-        except Exception as e:
-
-            print(
-                "FLAGGED DTR ERROR:",
-                repr(e)
-            )
-
-
-        # -------------------------------------------------
-        # PAYROLL AWAITING APPROVAL
-        # -------------------------------------------------
-
-        try:
-
-            result = (
-
-                db.table("payroll_runs")
-
-                .select("*")
-
-                .eq(
-                    "status",
-                    "draft"
-                )
-
-                .order(
-                    "created_at",
-                    desc=True
-                )
-
-                .execute()
-
-            )
-
-
-            payroll_runs = (
-                result.data
-                or []
-            )
-
-
-            stats["pending_payroll"] = (
-                len(
-                    payroll_runs
-                )
-            )
-
-
-        except Exception as e:
-
-            print(
-                "PENDING PAYROLL ERROR:",
-                repr(e)
-            )
-
-
-    # =====================================================
-    # PAYROLL CLERK
-    # =====================================================
-
-    elif role == "hr":
-
-        # -------------------------------------------------
-        # ACTIVE EMPLOYEE COUNT
-        # -------------------------------------------------
-
-        try:
-
-            result = (
-
-                db.table("employees")
-
-                .select(
-                    "id",
-                    count="exact"
-                )
-
-                .eq(
-                    "active",
-                    True
-                )
-
-                .execute()
-
-            )
-
-
-            stats["employees"] = (
-                result.count
-                or 0
-            )
-
-
-        except Exception as e:
-
-            print(
-                "CLERK EMPLOYEE COUNT ERROR:",
-                repr(e)
-            )
-
-
-        # -------------------------------------------------
-        # FLAGGED DTR
-        # -------------------------------------------------
-
-        try:
-
-            result = (
-
-                db.table("dtr_entries")
-
-                .select(
-                    "id",
-                    count="exact"
-                )
-
-                .eq(
-                    "requires_review",
-                    True
-                )
-
-                .execute()
-
-            )
-
-
-            stats["flagged_dtr"] = (
-                result.count
-                or 0
-            )
-
-
-        except Exception as e:
-
-            print(
-                "CLERK DTR COUNT ERROR:",
-                repr(e)
-            )
-
-
-        # -------------------------------------------------
-        # LOAD AVAILABLE MASTER DTR BATCHES
-        # -------------------------------------------------
-
-        try:
-
-            dtr_rows = (
-
-                db.table("dtr_entries")
-
-                .select(
-                    "import_batch,"
-                    "work_date"
-                )
-
-                .order(
-                    "work_date"
-                )
-
-                .execute()
-
-                .data
-
-                or []
-
-            )
-
-
-            grouped = {}
-
-
-            for dtr_row in dtr_rows:
-
-                batch_id = (
-                    dtr_row.get(
-                        "import_batch"
-                    )
-                )
-
-                work_date = (
-                    dtr_row.get(
-                        "work_date"
-                    )
-                )
-
-
-                if not batch_id:
-                    continue
-
-
-                if batch_id not in grouped:
-
-                    grouped[batch_id] = {
-
-                        "id":
-                            batch_id,
-
-                        "start_date":
-                            work_date,
-
-                        "end_date":
-                            work_date,
-
-                        "records":
-                            0
-
-                    }
-
-
-                grouped[
-                    batch_id
-                ]["records"] += 1
-
-
-                if work_date:
-
-                    if (
-                        not grouped[
-                            batch_id
-                        ]["start_date"]
-
-                        or work_date
-                        < grouped[
-                            batch_id
-                        ]["start_date"]
-                    ):
-
-                        grouped[
-                            batch_id
-                        ]["start_date"] = (
-                            work_date
-                        )
-
-
-                    if (
-                        not grouped[
-                            batch_id
-                        ]["end_date"]
-
-                        or work_date
-                        > grouped[
-                            batch_id
-                        ]["end_date"]
-                    ):
-
-                        grouped[
-                            batch_id
-                        ]["end_date"] = (
-                            work_date
-                        )
-
-
-            dtr_batches = list(
-                grouped.values()
-            )
-
-
-            dtr_batches.sort(
-
-                key=lambda batch:
-                    batch.get(
-                        "start_date"
-                    )
-                    or "",
-
-                reverse=True
-
-            )
-
-
-        except Exception as e:
-
-            print(
-                "DTR BATCH LOAD ERROR:",
-                repr(e)
-            )
-
-            dtr_batches = []
-
-
-        # -------------------------------------------------
-        # RECENT PAYROLL
-        # -------------------------------------------------
-
-        try:
-
-            payroll_runs = (
-
-                db.table("payroll_runs")
-
-                .select("*")
-
-                .order(
-                    "created_at",
-                    desc=True
-                )
-
-                .limit(10)
-
-                .execute()
-
-            ).data or []
-
-
-        except Exception as e:
-
-            print(
-                "CLERK PAYROLL ERROR:",
-                repr(e)
-            )
-
-
-    # =====================================================
-    # EMPLOYEE
-    # =====================================================
-
-    else:
-
-        pass
-
-
-    return render_template(
-
-        "dashboard.html",
-
-        profile=
-            profile,
-
-        stats=
-            stats,
-
-        pending_users=
-            pending_users,
-
-        payroll_runs=
-            payroll_runs,
-
-        dtr_batches=
-            dtr_batches,
-
-        selected_dtr_batch=
-            selected_dtr_batch
-
+        employee_payroll=employee_payroll,
     )
 
 
@@ -3525,6 +3136,6 @@ if __name__ == "__main__":
             )
         ),
 
-        debug=True
+        debug=os.getenv("FLASK_DEBUG", "false").lower() == "true"
 
     )
