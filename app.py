@@ -1181,6 +1181,28 @@ def dashboard():
                     if run_result.data:
                         approved_item = dict(item)
                         approved_item["payroll_run"] = run_result.data[0]
+
+                        # Fetch the itemized deductions saved during payroll generation.
+                        # Never substitute assumed statutory contribution amounts.
+                        approved_item["deduction_details"] = []
+                        approved_item["deductions_loaded"] = False
+                        try:
+                            deduction_result = (
+                                db.table("payroll_item_deductions")
+                                .select("name,amount")
+                                .eq("payroll_item_id", item["id"])
+                                .execute()
+                            )
+                            approved_item["deduction_details"] = (
+                                deduction_result.data or []
+                            )
+                            approved_item["deductions_loaded"] = True
+                        except Exception:
+                            app.logger.exception(
+                                "PAYROLL DEDUCTION DETAILS ERROR for item %s",
+                                item.get("id"),
+                            )
+
                         employee_payroll.append(approved_item)
 
                 employee_payroll.sort(
