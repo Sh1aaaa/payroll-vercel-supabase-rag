@@ -1149,26 +1149,47 @@ def dashboard():
             )
             if result.data:
                 employee = result.data[0]
+
             if employee:
                 attendance_records = (
                     db.table("dtr_entries").select("*")
                     .eq("employee_id", employee["id"])
-                    .order("work_date", desc=True).execute().data or []
+                    .order("work_date", desc=True)
+                    .execute().data or []
                 )
+
+                # Retrieve only this employee's payroll items.
                 payroll_items = (
                     db.table("payroll_items").select("*")
-                    .eq("employee_id", employee["id"]).execute().data or []
+                    .eq("employee_id", employee["id"])
+                    .execute().data or []
                 )
+
+                # Publish only payroll that the Super Admin approved.
+                # The employee cannot access the staff payroll detail route.
                 for item in payroll_items:
+                    run_id = item.get("payroll_run_id")
+                    if not run_id:
+                        continue
                     run_result = (
                         db.table("payroll_runs")
                         .select("id,start_date,end_date,cutoff_no,status")
-                        .eq("id", item["payroll_run_id"])
+                        .eq("id", run_id)
+                        .eq("status", "approved")
                         .limit(1).execute()
                     )
                     if run_result.data:
-                        item["payroll_run"] = run_result.data[0]
-                        employee_payroll.append(item)
+                        approved_item = dict(item)
+                        approved_item["payroll_run"] = run_result.data[0]
+                        employee_payroll.append(approved_item)
+
+                employee_payroll.sort(
+                    key=lambda item: (
+                        item["payroll_run"].get("end_date") or "",
+                        item["payroll_run"].get("start_date") or "",
+                    ),
+                    reverse=True,
+                )
         except Exception:
             app.logger.exception("EMPLOYEE DASHBOARD ERROR")
             flash("Some attendance or payroll records could not be loaded.", "error")
