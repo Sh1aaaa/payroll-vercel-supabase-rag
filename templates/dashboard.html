@@ -440,7 +440,31 @@
                         </td>
 
                         <td>
-                            ₱{{ "%.2f"|format(item.get('total_deductions', 0)|float) }}
+                            <strong>₱{{ "%.2f"|format(item.get('total_deductions', 0)|float) }}</strong>
+
+                            {% if not item.get('deductions_loaded', False) %}
+                                <div class="empty-state" style="margin-top: 0.5rem;">
+                                    Deduction breakdown temporarily unavailable.
+                                </div>
+                            {% elif item.get('deduction_details') %}
+                                <details style="margin-top: 0.5rem;">
+                                    <summary style="cursor: pointer;">View deduction types</summary>
+                                    <ul style="padding-left: 1.2rem; margin: 0.5rem 0;">
+                                        {% for deduction in item.get('deduction_details', []) %}
+                                        <li>
+                                            {{ deduction.get('name') or 'Other deduction' }}:
+                                            ₱{{ "%.2f"|format(deduction.get('amount', 0)|float) }}
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                </details>
+                            {% elif item.get('total_deductions', 0)|float > 0 %}
+                                <div style="margin-top: 0.5rem;">
+                                    No itemized deduction records were saved for this payroll.
+                                </div>
+                            {% else %}
+                                <div style="margin-top: 0.5rem;">No deductions recorded.</div>
+                            {% endif %}
                         </td>
 
                         <td>
