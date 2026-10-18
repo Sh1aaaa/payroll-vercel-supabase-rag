@@ -2967,198 +2967,83 @@ def approve_payroll(run_id):
 # COMPLAINTS / RAG
 # =========================================================
 
-@app.route(
-    "/complaints",
-    methods=["GET", "POST"]
-)
+@app.route("/complaints", methods=["GET", "POST"])
 @login_required
 def complaints():
+    profile = current_profile()
+    if not profile or not profile.get("id"):
+        session.clear()
+        return redirect(url_for("login"))
 
     db = admin_client()
-
+    profile_id = str(profile["id"])
+    role = profile.get("role", "employee")
 
     if request.method == "POST":
-
-        complaint_text = request.form.get(
-            "complaint",
-            ""
-        ).strip()
-
-
+        complaint_text = request.form.get("complaint", "").strip()
         if not complaint_text:
-
-            flash(
-                "Enter your complaint.",
-                "error"
-            )
-
-            return redirect(
-                url_for("complaints")
-            )
-
+            flash("Enter your complaint.", "error")
+            return redirect(url_for("complaints"))
 
         try:
+            # complaints.employee_id is a UUID referencing employees.id,
+            # not the school employee number stored in the session.
+            employee_result = (
+                db.table("employees")
+                .select("id")
+                .eq("profile_id", profile_id)
+                .limit(1)
+                .execute()
+            )
+            employee_uuid = (
+                employee_result.data[0].get("id")
+                if employee_result.data else None
+            )
 
-            # -------------------------------------------------
-            # RAG
-            # -------------------------------------------------
-
+            assessment = (
+                "AI assessment is unavailable. "
+                "The complaint requires HR review."
+            )
             if assess_complaint:
-
                 try:
+                    rag_result = assess_complaint(complaint_text)
+                    if isinstance(rag_result, str) and rag_result.strip():
+                        assessment = rag_result
+                except Exception:
+                    app.logger.exception("RAG ASSESSMENT ERROR")
 
-                    assessment = (
-                        assess_complaint(
-                            complaint_text
-                        )
-                    )
-
-                except Exception as rag_error:
-
-                    print(
-                        "RAG ERROR:",
-                        repr(
-                            rag_error
-                        )
-                    )
-
-                    assessment = (
-                        "RAG assessment is temporarily unavailable."
-                    )
-
-            else:
-
-                assessment = (
-                    "RAG service is unavailable."
-                )
-
-
-            # -------------------------------------------------
-            # SAVE COMPLAINT
-            # -------------------------------------------------
-
-            db.table(
-                "complaints"
-            ).insert({
-
-                "employee_id":
-                    session.get(
-                        "employee_id"
-                    ),
-
-                "complaint":
-                    complaint_text,
-
-                "assessment":
-                    assessment,
-
-                "status":
-                    "assessed"
-
+            # submitted_by is a UUID referencing the logged-in profile.
+            # Both UUID fields must be valid UUIDs or None (never an empty string).
+            db.table("complaints").insert({
+                "employee_id": employee_uuid or None,
+                "submitted_by": profile_id,
+                "complaint": complaint_text,
+                "assessment": assessment,
+                "status": "assessed",
             }).execute()
 
+            flash("Complaint submitted successfully.", "success")
+            return redirect(url_for("complaints"))
 
-            flash(
-                "Complaint submitted.",
-                "success"
-            )
-
-
-            return redirect(
-                url_for("complaints")
-            )
-
-
-        except Exception as e:
-
-            print(
-                "COMPLAINT ERROR:",
-                repr(e)
-            )
-
-            flash(
-                f"Complaint submission failed: {str(e)}",
-                "error"
-            )
-
-
-    # =====================================================
-    # LOAD COMPLAINTS
-    # =====================================================
-
-    profile = current_profile()
-
+        except Exception as exc:
+            app.logger.exception("COMPLAINT SUBMISSION ERROR")
+            flash(f"Complaint submission failed: {exc}", "error")
 
     try:
-
-        query = (
-
-            db.table(
-                "complaints"
-            )
-
-            .select("*")
-
-        )
-
-
-        if (
-            not profile
-
-            or profile.get(
-                "role"
-            )
-
-            not in (
-                "super_admin",
-                "hr"
-            )
-        ):
-
-            query = query.eq(
-                "user_id",
-                session.get(
-                    "user_id"
-                )
-            )
-
-
+        query = db.table("complaints").select("*")
+        if role not in ("super_admin", "hr"):
+            # The database has submitted_by, not user_id.
+            query = query.eq("submitted_by", profile_id)
         rows = (
-
-            query
-
-            .order(
-                "created_at",
-                desc=True
-            )
-
-            .execute()
-
-            .data
-
-            or []
-
+            query.order("created_at", desc=True)
+            .execute().data or []
         )
-
-
-    except Exception as e:
-
-        print(
-            "COMPLAINT LIST ERROR:",
-            repr(e)
-        )
-
+    except Exception:
+        app.logger.exception("COMPLAINT LIST ERROR")
         rows = []
+        flash("Could not load complaints.", "error")
 
-
-    return render_template(
-
-        "complaints.html",
-
-        complaints=
-            rows
-
-    )
+    return render_template("complaints.html", complaints=rows)
 
 
 # =========================================================
