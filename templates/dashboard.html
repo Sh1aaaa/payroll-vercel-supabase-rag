@@ -227,6 +227,65 @@
         </div>
     </div>
 
+    <!-- MASTER DTR BATCH SELECTION: PAYROLL CLERK ONLY -->
+    <section class="panel">
+        <h2>Select Master DTR Batch</h2>
+        <p>
+            Choose the official attendance batch uploaded by the Super Admin
+            before generating payroll.
+        </p>
+
+        {% if dtr_batches %}
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Date Range</th>
+                        <th>Attendance Records</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for batch in dtr_batches %}
+                    <tr>
+                        <td>
+                            {{ batch.get('start_date') or '-' }}
+                            — {{ batch.get('end_date') or '-' }}
+                        </td>
+                        <td>{{ batch.get('records', 0) }}</td>
+                        <td>
+                            {% if selected_dtr_batch == batch.get('id') %}
+                                <span class="status status-approved">Selected</span>
+                            {% else %}
+                                <span class="status status-waiting">Not Selected</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <form method="POST"
+                                  action="{{ url_for('select_dtr_batch', batch_id=batch.get('id')) }}">
+                                <button type="submit" class="btn btn-primary"
+                                        {% if selected_dtr_batch == batch.get('id') %}disabled{% endif %}>
+                                    {% if selected_dtr_batch == batch.get('id') %}
+                                        Currently Selected
+                                    {% else %}
+                                        Select DTR
+                                    {% endif %}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+            <div class="empty-state">
+                No Master DTR batches found. Ask the Super Admin to upload a DTR CSV first.
+            </div>
+        {% endif %}
+    </section>
+
     <section class="panel">
         <h2>Payroll Processing</h2>
 
