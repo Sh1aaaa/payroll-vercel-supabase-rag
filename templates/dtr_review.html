@@ -1,27 +1,57 @@
 {% extends 'base.html' %}
-{% block title %}DTR Review - BulSU Payroll{% endblock %}
+{% block title %}DTR Error Review - BulSU Payroll{% endblock %}
 {% block content %}
 <div class="role-dashboard">
-  <div class="dashboard-heading"><h1>Review and Correct DTR</h1>
-    <p>Super Admin only. Correct entries using verified attendance evidence. Corrections are logged.</p></div>
-  <section class="panel"><h2>Batch Summary</h2><p>{{ total }} records; <strong>{{ flagged|length }} unresolved flagged records</strong>.</p>
-    <p>Batch ID: <code>{{ batch_id }}</code></p></section>
-  <section class="panel"><h2>Flagged Entries</h2>
-  {% if flagged %}
-  <div class="table-wrap"><table class="data-table"><thead><tr><th>Employee</th><th>Work Date</th><th>Error</th><th>Correct Time In / Out</th></tr></thead><tbody>
-  {% for entry in flagged %}
-  <tr><td>{{ entry.employees.full_name if entry.employees else entry.employee_id }}<br><small>{{ entry.employees.employee_no if entry.employees else '' }}</small></td>
-    <td>{{ entry.work_date }}</td><td><strong>{{ entry.status }}</strong><br>{{ entry.reason }}</td>
-    <td><form method="POST" action="{{ url_for('dtr_correct',batch_id=batch_id,entry_id=entry.id) }}">
-      <label>Time In (HH:MM) <input name="time_in" type="time" required></label>
-      <label>Time Out (HH:MM) <input name="time_out" type="time" required></label>
-      <label>Correction reason <input name="correction_reason" type="text" minlength="5" maxlength="500" placeholder="Verified against attendance log" required></label>
-      <button type="submit" class="btn btn-primary" onclick="return confirm('Save and audit this DTR correction?')">Verify &amp; Save</button>
-    </form></td></tr>
-  {% endfor %}
-  </tbody></table></div>
-  {% else %}<p>All attendance records in this batch have passed DTR validation.</p>{% endif %}
+  <div class="dashboard-heading">
+    <h1>DTR Error Review</h1>
+    <p>Identify attendance errors and their source CSV row numbers. Corrections are uploaded as one CSV file from the Master DTR page.</p>
+  </div>
+  <section class="panel">
+    <h2>Batch Validation Summary</h2>
+    <p><strong>Total:</strong> {{ total }} &nbsp; | &nbsp;
+       <strong>Valid:</strong> {{ total - flagged|length }} &nbsp; | &nbsp;
+       <strong>Requires review:</strong> {{ flagged|length }}</p>
+    <p><small>Batch: <code>{{ batch_id }}</code></small></p>
   </section>
-  <section class="panel"><a href="{{ url_for('dtr_upload') }}" class="btn btn-secondary">Back to Master DTR</a></section>
+  <section class="panel">
+    <h2>Errors and Locations</h2>
+    {% if flagged %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr>
+            <th>CSV Line</th><th>Employee</th><th>Work Date</th><th>Error Type</th><th>Reason</th>
+          </tr></thead>
+          <tbody>
+            {% for entry in flagged %}
+            <tr>
+              <td>
+                {% if entry.source_row_number is not none %}
+                  <strong>{{ entry.source_row_number }}</strong>
+                {% else %}
+                  <span title="Original CSV line was not stored for this older upload">Not recorded</span>
+                {% endif %}
+              </td>
+              <td>
+                {{ entry.employees.full_name if entry.employees else '-' }}
+                <div><small>{{ entry.employees.employee_no if entry.employees else entry.employee_id }}</small></div>
+              </td>
+              <td>{{ entry.work_date }}</td>
+              <td><strong>{{ entry.status }}</strong></td>
+              <td>{{ entry.reason or 'Requires attendance review' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p><strong>How to correct:</strong> Make one CSV with the corrected records using
+        <code>employee_no,work_date,time_in,time_out</code>, open Master DTR, choose
+        <strong>Correct existing flagged DTR records (CSV)</strong>, select this batch,
+        provide the verification reason, and upload the CSV.</p>
+      <p><small>For uploads made before the source-line tracking update, the original CSV line number cannot be reconstructed reliably. Match those records by employee number and work date.</small></p>
+    {% else %}
+      <p>There are no unresolved flagged records in this batch.</p>
+    {% endif %}
+  </section>
+  <section class="panel"><a class="btn btn-secondary" href="{{ url_for('dtr_upload') }}">Back to Master DTR</a></section>
 </div>
 {% endblock %}
