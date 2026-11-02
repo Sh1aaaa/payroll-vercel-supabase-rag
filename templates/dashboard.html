@@ -242,6 +242,7 @@
                     <tr>
                         <th>Date Range</th>
                         <th>Attendance Records</th>
+                        <th>DTR Validation</th>
                         <th>Status</th>
                         <th>Action</th>
                     </tr>
@@ -254,6 +255,13 @@
                             — {{ batch.get('end_date') or '-' }}
                         </td>
                         <td>{{ batch.get('records', 0) }}</td>
+                        <td>
+                          {% if batch.get('flagged', 0) %}
+                            <span class="status status-waiting">{{ batch.flagged }} flagged — needs correction</span>
+                          {% else %}
+                            <span class="status status-approved">No flagged records</span>
+                          {% endif %}
+                        </td>
                         <td>
                             {% if selected_dtr_batch == batch.get('id') %}
                                 <span class="status status-approved">Selected</span>
@@ -433,9 +441,8 @@
                         <td>{{ record.get('payable_hours', 0) or 0 }}</td>
                         <td>
                             {% if record.get('requires_review') %}
-                                <span class="status status-waiting">
-                                    For Review
-                                </span>
+                                <span class="status status-waiting">For Review</span>
+                                <div><small>{{ record.get('status') or 'Invalid DTR' }}: {{ record.get('reason') or 'Needs verification' }}</small></div>
                             {% elif record.get('status') %}
                                 {{ record.get('status') }}
                             {% else %}
