@@ -1,6 +1,9 @@
 import os
 import uuid
 import hmac
+import secrets
+from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from datetime import datetime, timezone
 
@@ -68,6 +71,153 @@ app.secret_key = os.getenv(
     "FLASK_SECRET_KEY",
     "change-this-secret"
 )
+
+
+# =========================================================
+# SALARY ADJUSTMENT HELPERS
+# =========================================================
+
+def _salary_authorized(allowed_roles):
+    """Require an approved, database-verified account (no session fallback)."""
+    uid = session.get("user_id")
+    if not uid:
+        abort(403)
+    rows = (admin_client().table("profiles")
+            .select("id,full_name,role,approved").eq("id", uid)
+            .eq("approved", True).limit(1).execute().data or [])
+    if not rows or rows[0].get("role") not in allowed_roles:
+        abort(403)
+    return rows[0]
+
+
+def _salary_csrf():
+    if not session.get("salary_csrf"):
+        session["salary_csrf"] = secrets.token_urlsafe(32)
+    return session["salary_csrf"]
+
+
+def _check_salary_csrf():
+    expected = session.get("salary_csrf", "")
+    received = request.form.get("salary_csrf", "")
+    if not expected or not hmac.compare_digest(expected, received):
+        abort(400, "Invalid salary-adjustment form token")
+
+
+def _salary_money(value):
+    result = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if not result.is_finite() or result <= 0:
+        raise ValueError("Hourly rate must be a positive number")
+    return result
+
+
+def _approved_hourly_rate(db, employee, start_date):
+    """Rate effective ON OR BEFORE cutoff start; never apply mid-cutoff."""
+    rows = (db.table("salary_adjustments")
+            .select("new_hourly_rate,effective_date")
+            .eq("employee_id", employee["id"])
+            .eq("status", "approved")
+            .lte("effective_date", start_date)
+            .order("effective_date", desc=True)
+            .limit(1).execute().data or [])
+    if not rows:
+        return None
+    return Decimal(str(rows[0]["new_hourly_rate"]))
+
+
+def _payroll_employee_at_date(db, employee, start_date, end_date):
+    """Use approved salary history without changing approved historical payroll."""
+    overlapping = (db.table("salary_adjustments")
+                   .select("id,effective_date")
+                   .eq("employee_id", employee["id"])
+                   .eq("status", "approved")
+                   .gt("effective_date", start_date)
+                   .lte("effective_date", end_date)
+                   .limit(1).execute().data or [])
+    if overlapping:
+        raise ValueError("Salary change falls inside this cutoff for " +
+                         str(employee.get("employee_no")) +
+                         ". Split the payroll period or adjust the effective date.")
+    effective = _approved_hourly_rate(db, employee, start_date)
+    if effective is None:
+        return employee
+    modified = dict(employee)
+    modified["hourly_rate"] = float(effective)
+    if str(employee.get("employee_type") or "regular").lower() not in ("casual", "ebjo", "cos", "part_time"):
+        days = Decimal(str(employee.get("workdays_per_month") or 22))
+        hours = Decimal(str(employee.get("standard_hours") or 8))
+        modified["monthly_salary"] = float((effective * days * hours).quantize(Decimal("0.01")))
+    return modified
+
+
+@app.route("/salary-adjustments", methods=["GET", "POST"])
+@login_required
+def salary_adjustments():
+    profile = _salary_authorized(("hr", "super_admin"))
+    db = admin_client()
+    if request.method == "POST":
+        _check_salary_csrf()
+        if profile["role"] != "hr":
+            abort(403)
+        try:
+            employee_id = request.form.get("employee_id", "").strip()
+            effective_date = date.fromisoformat(request.form.get("effective_date", ""))
+            if effective_date < date.today():
+                raise ValueError("Effective date cannot be in the past")
+            new_rate = _salary_money(request.form.get("new_hourly_rate", ""))
+            reason = request.form.get("reason", "").strip()
+            if len(reason) < 10 or len(reason) > 1000:
+                raise ValueError("Reason must contain 10 to 1000 characters")
+            result = db.rpc("request_salary_adjustment", {
+                "p_employee_id": employee_id,
+                "p_actor": profile["id"],
+                "p_new_rate": str(new_rate),
+                "p_effective_date": effective_date.isoformat(),
+                "p_reason": reason,
+            }).execute()
+            flash("Salary adjustment submitted for Super Admin approval.", "success")
+        except Exception as exc:
+            app.logger.exception("SALARY REQUEST ERROR")
+            flash("Unable to submit salary adjustment: " + str(exc), "error")
+        return redirect(url_for("salary_adjustments"))
+    employees = (db.table("employees").select("id,employee_no,full_name,employee_type,monthly_salary,hourly_rate,standard_hours,workdays_per_month")
+                 .eq("active", True).order("full_name").execute().data or [])
+    requests = (db.table("salary_adjustments").select("*")
+                .order("created_at", desc=True).limit(200).execute().data or [])
+    for item in employees:
+        effective = _approved_hourly_rate(db, item, date.today().isoformat())
+        if effective is None:
+            kind = str(item.get("employee_type") or "regular").lower()
+            if kind in ("casual", "ebjo", "cos", "part_time"):
+                effective = Decimal(str(item.get("hourly_rate") or 0))
+            else:
+                divisor = Decimal(str(item.get("workdays_per_month") or 22)) * Decimal(str(item.get("standard_hours") or 8))
+                effective = Decimal(str(item.get("monthly_salary") or 0)) / divisor if divisor else Decimal(0)
+        item["effective_hourly_rate"] = str(effective.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    return render_template("salary_adjustments.html", profile=profile, employees=employees,
+                           salary_requests=requests, csrf_token=_salary_csrf(), today=date.today().isoformat())
+
+
+@app.route("/salary-adjustments/<request_id>/decision", methods=["POST"])
+@login_required
+def salary_adjustment_decision(request_id):
+    profile = _salary_authorized(("super_admin",))
+    _check_salary_csrf()
+    action = request.form.get("decision", "")
+    if action not in ("approve", "reject"):
+        abort(400)
+    try:
+        db = admin_client()
+        db.rpc("decide_salary_adjustment", {
+            "p_request_id": request_id,
+            "p_actor": profile["id"],
+            "p_approve": action == "approve",
+            "p_note": request.form.get("decision_note", "").strip()[:1000],
+        }).execute()
+        flash("Salary adjustment " + ("approved." if action == "approve" else "rejected."), "success")
+    except Exception as exc:
+        app.logger.exception("SALARY APPROVAL ERROR")
+        flash("Unable to decide request: " + str(exc), "error")
+    return redirect(url_for("salary_adjustments"))
 
 
 # =========================================================
@@ -2541,9 +2691,10 @@ def payroll():
                 # calculate() requires SIX arguments.
                 # =============================================
 
+                salary_employee = _payroll_employee_at_date(db, employee, start_date, end_date)
                 calculation = calculate(
 
-                    employee,
+                    salary_employee,
 
                     start_date,
 
@@ -2606,11 +2757,13 @@ def payroll():
 
                             "dtr_records":
                                 len(dtr_rows),
+                            "salary_hourly_rate_applied": salary_employee.get("hourly_rate"),
+                            "salary_monthly_applied": salary_employee.get("monthly_salary"),
 
                             # Read-only attendance breakdown for future payslips.
                             # No shift schedule means no invented late/undertime.
                             **payroll_attendance_summary(
-                                employee,
+                                salary_employee,
                                 dtr_rows,
                                 os.getenv("PAYROLL_SHIFT_START") or None,
                                 os.getenv("PAYROLL_SHIFT_END") or None
