@@ -1,6 +1,7 @@
 import os
 import uuid
 import hmac
+from io import BytesIO
 
 from flask import (
     Flask,
@@ -10,7 +11,9 @@ from flask import (
     url_for,
     flash,
     session,
-    jsonify
+    jsonify,
+    send_file,
+    abort
 )
 
 from dotenv import load_dotenv
@@ -32,6 +35,7 @@ from services.dtr_service import (
 )
 
 from services.payroll_service import calculate
+from services.payslip_service import generate_payslip_pdf
 
 
 # =========================================================
@@ -3044,6 +3048,51 @@ def complaints():
         flash("Could not load complaints.", "error")
 
     return render_template("complaints.html", complaints=rows)
+
+
+# =========================================================
+# EMPLOYEE PAYSLIP PDF DOWNLOAD
+# =========================================================
+
+@app.route('/employee/payslip/<item_id>/download')
+@login_required
+def download_payslip(item_id):
+    profile = current_profile()
+    if not profile or profile.get('role') != 'employee':
+        abort(403)
+
+    db = admin_client()
+    owned = (db.table('employees').select('id,full_name,employee_no,employee_type,department')
+             .eq('profile_id', profile['id']).limit(1).execute().data or [])
+    if not owned:
+        abort(404)
+    employee = owned[0]
+
+    items = (db.table('payroll_items').select('*')
+             .eq('id', item_id).eq('employee_id', employee['id'])
+             .limit(1).execute().data or [])
+    if not items:
+        abort(404)
+    item = items[0]
+
+    runs = (db.table('payroll_runs').select('*')
+            .eq('id', item['payroll_run_id']).eq('status', 'approved')
+            .limit(1).execute().data or [])
+    if not runs:
+        abort(404)
+
+    deductions = (db.table('payroll_item_deductions').select('name,amount')
+                  .eq('payroll_item_id', item['id']).execute().data or [])
+    try:
+        pdf = generate_payslip_pdf(employee, item, runs[0], deductions)
+    except ValueError:
+        app.logger.exception('PAYSLIP DATA VALIDATION ERROR')
+        abort(409, description='Approved payslip data is incomplete or inconsistent.')
+    response = send_file(BytesIO(pdf), mimetype='application/pdf', as_attachment=True,
+                         download_name=f"payslip-{item['id']}.pdf")
+    response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 # =========================================================
