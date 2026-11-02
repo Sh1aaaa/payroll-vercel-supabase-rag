@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block title %}DTR Review - BulSU Payroll{% endblock %}
+{% block content %}
+<div class="role-dashboard">
+  <div class="dashboard-heading"><h1>Review and Correct DTR</h1>
+    <p>Super Admin only. Correct entries using verified attendance evidence. Corrections are logged.</p></div>
+  <section class="panel"><h2>Batch Summary</h2><p>{{ total }} records; <strong>{{ flagged|length }} unresolved flagged records</strong>.</p>
+    <p>Batch ID: <code>{{ batch_id }}</code></p></section>
+  <section class="panel"><h2>Flagged Entries</h2>
+  {% if flagged %}
+  <div class="table-wrap"><table class="data-table"><thead><tr><th>Employee</th><th>Work Date</th><th>Error</th><th>Correct Time In / Out</th></tr></thead><tbody>
+  {% for entry in flagged %}
+  <tr><td>{{ entry.employees.full_name if entry.employees else entry.employee_id }}<br><small>{{ entry.employees.employee_no if entry.employees else '' }}</small></td>
+    <td>{{ entry.work_date }}</td><td><strong>{{ entry.status }}</strong><br>{{ entry.reason }}</td>
+    <td><form method="POST" action="{{ url_for('dtr_correct',batch_id=batch_id,entry_id=entry.id) }}">
+      <label>Time In (HH:MM) <input name="time_in" type="time" required></label>
+      <label>Time Out (HH:MM) <input name="time_out" type="time" required></label>
+      <label>Correction reason <input name="correction_reason" type="text" minlength="5" maxlength="500" placeholder="Verified against attendance log" required></label>
+      <button type="submit" class="btn btn-primary" onclick="return confirm('Save and audit this DTR correction?')">Verify &amp; Save</button>
+    </form></td></tr>
+  {% endfor %}
+  </tbody></table></div>
+  {% else %}<p>All attendance records in this batch have passed DTR validation.</p>{% endif %}
+  </section>
+  <section class="panel"><a href="{{ url_for('dtr_upload') }}" class="btn btn-secondary">Back to Master DTR</a></section>
+</div>
+{% endblock %}
