@@ -31,7 +31,8 @@ from services.auth_service import (
 
 from services.dtr_service import (
     parse_csv,
-    evaluate_day
+    evaluate_day,
+    payroll_attendance_summary
 )
 
 from services.payroll_service import calculate
@@ -2582,7 +2583,16 @@ def payroll():
                                 end_date,
 
                             "dtr_records":
-                                len(dtr_rows)
+                                len(dtr_rows),
+
+                            # Read-only attendance breakdown for future payslips.
+                            # No shift schedule means no invented late/undertime.
+                            **payroll_attendance_summary(
+                                employee,
+                                dtr_rows,
+                                os.getenv("PAYROLL_SHIFT_START") or None,
+                                os.getenv("PAYROLL_SHIFT_END") or None
+                            )
                         }
 
                     })
