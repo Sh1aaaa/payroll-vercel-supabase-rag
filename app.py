@@ -2,6 +2,7 @@ import os
 import uuid
 import hmac
 from io import BytesIO
+from datetime import datetime, timezone
 
 from flask import (
     Flask,
@@ -1105,7 +1106,7 @@ def dashboard():
         try:
             dtr_rows = (
                 db.table("dtr_entries")
-                .select("import_batch,work_date")
+                .select("import_batch,work_date,requires_review")
                 .order("work_date").execute().data or []
             )
             grouped = {}
@@ -1120,9 +1121,12 @@ def dashboard():
                         "start_date": work_date,
                         "end_date": work_date,
                         "records": 0,
+                        "flagged": 0,
                     }
                 batch = grouped[batch_id]
                 batch["records"] += 1
+                if row.get("requires_review"):
+                    batch["flagged"] += 1
                 if work_date:
                     if not batch["start_date"] or work_date < batch["start_date"]:
                         batch["start_date"] = work_date
@@ -1885,6 +1889,111 @@ def dtr_upload():
     return redirect(url_for("dtr_upload"))
 
 
+
+# =========================================================
+# SUPER ADMIN DTR REVIEW AND CORRECTION
+# =========================================================
+
+@app.route("/dtr/review/<batch_id>")
+@login_required
+@role_required("super_admin")
+def dtr_review(batch_id):
+    db = admin_client()
+    try:
+        rows = (db.table("dtr_entries")
+                .select("id,employee_id,work_date,time_in,time_out,status,reason,requires_review,payable_hours,import_batch,employees(employee_no,full_name)")
+                .eq("import_batch", batch_id)
+                .order("work_date")
+                .execute().data or [])
+        if not rows:
+            flash("DTR batch not found.", "error")
+            return redirect(url_for("dtr_upload"))
+        flagged = [row for row in rows if row.get("requires_review")]
+        return render_template("dtr_review.html", batch_id=batch_id, records=rows,
+                               flagged=flagged, total=len(rows))
+    except Exception:
+        app.logger.exception("DTR REVIEW ERROR")
+        flash("Could not load DTR review.", "error")
+        return redirect(url_for("dtr_upload"))
+
+
+@app.route("/dtr/review/<batch_id>/correct/<entry_id>", methods=["POST"])
+@login_required
+@role_required("super_admin")
+def dtr_correct(batch_id, entry_id):
+    db = admin_client()
+    # Sensitive payroll edits require a fresh DB-verified, approved Super Admin.
+    verified = (db.table("profiles").select("id,role,approved")
+                .eq("id", session.get("user_id"))
+                .eq("role", "super_admin").eq("approved", True)
+                .limit(1).execute().data or [])
+    if not verified:
+        abort(403)
+    try:
+        current = (db.table("dtr_entries").select("*")
+                   .eq("id", entry_id).eq("import_batch", batch_id)
+                   .limit(1).execute().data or [])
+        if not current:
+            flash("Attendance entry not found in that batch.", "error")
+            return redirect(url_for("dtr_review", batch_id=batch_id))
+        old = current[0]
+        work_date = old["work_date"]
+        # Conservative protection: do not edit dates covered by any approved/released payroll.
+        protected = (db.table("payroll_runs").select("id")
+                     .in_("status", ["approved", "released"])
+                     .lte("start_date", work_date).gte("end_date", work_date)
+                     .limit(1).execute().data or [])
+        if protected:
+            raise ValueError("This date overlaps an approved or released payroll. Correction is blocked; follow a formal adjustment workflow.")
+        explanation = request.form.get("correction_reason", "").strip()
+        if len(explanation) < 5:
+            raise ValueError("Enter a correction reason (at least 5 characters).")
+        from datetime import date as _date
+        from services.dtr_service import parse_datetime_on_date
+        work_day = _date.fromisoformat(work_date)
+        ti = parse_datetime_on_date(request.form.get("time_in", ""), work_day)
+        to = parse_datetime_on_date(request.form.get("time_out", ""), work_day)
+        emp = (db.table("employees").select("standard_hours")
+               .eq("id", old["employee_id"]).limit(1).execute().data or [])
+        if not emp:
+            raise ValueError("Employee record was not found.")
+        check = evaluate_day(work_day, ti, to,
+                             standard_hours=emp[0].get("standard_hours") or 8)
+        if check.get("requires_review"):
+            raise ValueError("The corrected times are still invalid: " + str(check.get("reason")))
+        new = {
+            "time_in": ti.isoformat() if ti else None,
+            "time_out": to.isoformat() if to else None,
+            "status": check["status"],
+            "payable_hours": float(check["payable_hours"]),
+            "requires_review": False,
+            "reason": check["reason"],
+            "reviewed_by": verified[0]["id"],
+            "reviewed_at": datetime.now(timezone.utc).isoformat()
+        }
+        old_values = {key: old.get(key) for key in ("time_in","time_out","status","payable_hours","requires_review","reason")}
+        # Audit insert first: no attendance mutation if audit storage is unavailable.
+        audit = (db.table("dtr_correction_audit").insert({
+            "dtr_entry_id": entry_id,
+            "employee_id": old["employee_id"],
+            "work_date": work_date,
+            "import_batch": batch_id,
+            "before_values": old_values,
+            "after_values": {key: new[key] for key in old_values},
+            "correction_reason": explanation,
+            "corrected_by": verified[0]["id"]
+        }).execute())
+        if not audit.data:
+            raise RuntimeError("Audit log could not be saved; attendance was not modified.")
+        db.table("dtr_entries").update(new).eq("id", entry_id).eq("import_batch", batch_id).execute()
+        flash("Attendance corrected, revalidated and logged.", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    except Exception:
+        app.logger.exception("DTR CORRECTION ERROR")
+        flash("Correction failed; check audit/history and database status before retrying.", "error")
+    return redirect(url_for("dtr_review", batch_id=batch_id))
+
 # =========================================================
 # SELECT MASTER DTR
 # PAYROLL CLERK ONLY
@@ -2220,6 +2329,34 @@ def payroll():
                     url_for("dashboard")
                 )
 
+
+            # Validate DTR batch and payroll dates BEFORE creating any payroll records.
+            # Do not silently pay a full regular cutoff on empty attendance.
+            from datetime import date as _date
+            if _date.fromisoformat(start_date) > _date.fromisoformat(end_date):
+                raise ValueError("Payroll start date must be on or before end date.")
+            selected_rows = (db.table("dtr_entries")
+                             .select("employee_id,work_date,requires_review")
+                             .eq("import_batch", selected_dtr_batch).execute().data or [])
+            if not selected_rows:
+                raise ValueError("Selected DTR batch is empty.")
+            all_days = [row["work_date"] for row in selected_rows]
+            if min(all_days) != start_date or max(all_days) != end_date:
+                raise ValueError("Payroll dates must match the selected DTR batch date range: "
+                                 + min(all_days) + " to " + max(all_days))
+            if any(row.get("requires_review") for row in selected_rows):
+                raise ValueError("Selected DTR batch contains unresolved flagged attendance. Ask Super Admin to correct it first.")
+            prior_runs = (db.table("payroll_runs").select("id,status")
+                          .eq("start_date", start_date).eq("end_date", end_date)
+                          .eq("cutoff_no", cutoff_no).execute().data or [])
+            if prior_runs:
+                raise ValueError("A payroll run for this exact period and cutoff already exists. Review it rather than generating a duplicate.")
+            active_employees = (db.table("employees").select("id")
+                                .eq("active", True).execute().data or [])
+            covered_ids = {row["employee_id"] for row in selected_rows}
+            missing_ids = [row["id"] for row in active_employees if row["id"] not in covered_ids]
+            if missing_ids:
+                raise ValueError(f"DTR batch is missing attendance for {len(missing_ids)} active employees. Complete the batch first.")
 
             # -------------------------------------------------
             # CREATE PAYROLL RUN
