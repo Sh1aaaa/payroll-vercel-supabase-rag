@@ -10,6 +10,7 @@
       <select id="upload-mode" name="upload_mode" class="form-control">
         <option value="new">Create new DTR batch</option>
         <option value="append">Append missing records to existing batch</option>
+        <option value="correct">Correct existing flagged DTR records (CSV)</option>
       </select>
       <div id="batch-choice" style="display:none;margin-top:1rem;">
         <label class="field-label" for="batch-id">Existing Batch</label>
@@ -20,6 +21,10 @@
           {% endfor %}
         </select>
       </div>
+      <div id="correction-reason-choice" style="display:none;margin-top:1rem;">
+        <label class="field-label" for="correction-reason">Correction reason (required for audit history)</label>
+        <textarea id="correction-reason" name="correction_reason" rows="2" minlength="5" maxlength="500" class="form-control" placeholder="e.g., Verified corrected log entries against official source records"></textarea>
+      </div>
       <div style="margin-top:1rem;">
         <label class="field-label" for="dtr-csv-file">CSV File</label>
         <input id="dtr-csv-file" type="file" name="file" accept=".csv,text/csv" required>
@@ -29,7 +34,9 @@
 2023106596,2026-10-01,08:00,17:00
 2023106597,2026-10-01,08:15,17:05</pre>
       </div>
-      <div class="control-note"><strong>Append rules:</strong> Only missing employee/date rows are inserted. Existing rows are never overwritten or moved. Appending is blocked if the batch's date range overlaps an approved payroll period. Uploaded rows with unmatched employee numbers are skipped.</div>
+      <div class="control-note"><strong>New:</strong> Creates a batch for newly inserted employee/date records.<br>
+      <strong>Append:</strong> Inserts missing employee/date records into an existing batch; existing records are never overwritten.<br>
+      <strong>Correct:</strong> Updates only flagged records already in the selected batch, using valid replacement times from the CSV. Unmatched, unflagged, or invalid replacement rows cause rejection. A written correction reason and audit record are required. Changes overlapping draft, approved, or released payroll are blocked.</div>
       <div id="dtr-progress" hidden aria-live="polite" style="margin:1.25rem 0;">
         <div style="display:flex;justify-content:space-between;gap:1rem;"><strong id="dtr-progress-status">Uploading CSV...</strong><span id="dtr-progress-percent">0%</span></div>
         <progress id="dtr-progress-bar" max="100" value="0" style="width:100%;height:1.2rem;"></progress>
@@ -39,12 +46,12 @@
     </form>
   </section>
   <section class="panel">
-    <h2>Review Imported DTR Batches</h2>
+    <h2>Review Imported DTR Errors</h2>
     {% if dtr_batches %}
     <div class="table-wrap"><table class="data-table"><thead><tr><th>Period</th><th>Records</th><th>Review</th></tr></thead><tbody>
     {% for batch in dtr_batches %}
     <tr><td>{{ batch.start }} — {{ batch.end }}</td><td>{{ batch.count }}</td>
-    <td><a class="btn btn-secondary" href="{{ url_for('dtr_review', batch_id=batch.id) }}">Review / Correct</a></td></tr>
+    <td><a class="btn btn-secondary" href="{{ url_for('dtr_review', batch_id=batch.id) }}">Review Errors</a></td></tr>
     {% endfor %}
     </tbody></table></div>
     {% else %}<p>No batches found.</p>{% endif %}
@@ -57,6 +64,8 @@
   const form=document.getElementById('dtr-upload-form');
   const mode=document.getElementById('upload-mode');
   const choice=document.getElementById('batch-choice');
+  const correctionChoice=document.getElementById('correction-reason-choice');
+  const reason=document.getElementById('correction-reason');
   const batch=document.getElementById('batch-id');
   const file=document.getElementById('dtr-csv-file');
   const button=document.getElementById('dtr-submit');
@@ -65,15 +74,15 @@
   const percent=document.getElementById('dtr-progress-percent');
   const status=document.getElementById('dtr-progress-status');
   const detail=document.getElementById('dtr-progress-detail');
-  function toggle(){const append=mode.value==='append';choice.style.display=append?'block':'none';batch.disabled=!append;batch.required=append;}
+  function toggle(){const needBatch=mode.value!=='new';const correcting=mode.value==='correct';choice.style.display=needBatch?'block':'none';batch.disabled=!needBatch;batch.required=needBatch;correctionChoice.style.display=correcting?'block':'none';reason.required=correcting;}
   mode.addEventListener('change',toggle);toggle();
   let sending=false;
   form.addEventListener('submit',evt=>{
-    if(sending || !file.files.length || (mode.value==='append'&&!batch.value)){evt.preventDefault();return;}
+    if(sending || !file.files.length || (mode.value!=='new'&&!batch.value)){evt.preventDefault();return;}
     if(!window.XMLHttpRequest || !window.FormData)return;
     evt.preventDefault();sending=true;
     const data=new FormData(form); // collect before disabling inputs
-    section.hidden=false;button.disabled=true;file.disabled=true;mode.disabled=true;batch.disabled=true;
+    section.hidden=false;button.disabled=true;file.disabled=true;mode.disabled=true;batch.disabled=true;reason.disabled=true;
     button.textContent='Uploading...';bar.value=0;percent.textContent='0%';
     const xhr=new XMLHttpRequest();xhr.open('POST',form.action,true);
     xhr.upload.onprogress=e=>{
@@ -88,10 +97,10 @@
         document.open();document.write(xhr.responseText);document.close();return;
       }
       status.textContent='Request failed';detail.textContent='HTTP '+xhr.status+'. Check Vercel logs and inspect the batch before retrying.';
-      button.disabled=false;file.disabled=false;mode.disabled=false;toggle();sending=false;
+      button.disabled=false;file.disabled=false;mode.disabled=false;reason.disabled=false;toggle();sending=false;
     };
-    xhr.onerror=()=>{status.textContent='Network error';detail.textContent='Check batch records before retrying.';button.disabled=false;file.disabled=false;mode.disabled=false;toggle();sending=false;};
-    xhr.ontimeout=()=>{status.textContent='Request timed out';detail.textContent='The import may have partially completed; inspect batch records before retrying.';button.disabled=false;file.disabled=false;mode.disabled=false;toggle();sending=false;};
+    xhr.onerror=()=>{status.textContent='Network error';detail.textContent='Check batch records before retrying.';button.disabled=false;file.disabled=false;mode.disabled=false;reason.disabled=false;toggle();sending=false;};
+    xhr.ontimeout=()=>{status.textContent='Request timed out';detail.textContent='The import may have partially completed; inspect batch records before retrying.';button.disabled=false;file.disabled=false;mode.disabled=false;reason.disabled=false;toggle();sending=false;};
     xhr.timeout=120000;xhr.send(data);
   });
 })();
