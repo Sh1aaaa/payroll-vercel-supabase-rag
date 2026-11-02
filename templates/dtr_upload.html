@@ -3,179 +3,162 @@
 {% block title %}Master DTR - BulSU Payroll{% endblock %}
 
 {% block content %}
-
 <div class="role-dashboard">
-
-    <!-- ========================= -->
-    <!-- PAGE HEADING -->
-    <!-- ========================= -->
-
     <div class="dashboard-heading">
-
         <h1>Commit Master DTR CSV</h1>
-
-        <p>
-            Super Admin only. These committed records are the official
-            attendance source used by the Payroll Clerk for payroll generation.
-        </p>
-
+        <p>Super Admin only. These committed records are the official attendance source used by the Payroll Clerk for payroll generation.</p>
     </div>
 
-
-    <!-- ========================= -->
-    <!-- MASTER DTR UPLOAD -->
-    <!-- ========================= -->
-
     <section class="panel">
-
         <h2>Upload Official DTR</h2>
+        <p>Upload the official attendance CSV file. Each upload will be saved as a separate DTR batch that the Payroll Clerk can select later.</p>
 
-        <p>
-            Upload the official attendance CSV file.
-            Each upload will be saved as a separate DTR batch that the
-            Payroll Clerk can select later.
-        </p>
+        <form id="dtr-upload-form" method="POST" enctype="multipart/form-data" action="{{ url_for('dtr_upload') }}">
+            <label class="field-label" for="dtr-csv-file">CSV File</label>
+            <input id="dtr-csv-file" type="file" name="file" accept=".csv,text/csv" required>
 
-
-        <form
-            method="POST"
-            enctype="multipart/form-data"
-        >
-
-            <!-- CSV FILE -->
-            <label class="field-label">
-                CSV File
-            </label>
-
-            <input
-                type="file"
-                name="file"
-                accept=".csv,text/csv"
-                required
-            >
-
-
-            <!-- REQUIRED FORMAT -->
             <div class="hint-box">
-
                 <strong>Expected columns:</strong>
-
-                <br><br>
-
-                <code>
-                    employee_no, work_date, time_in, time_out
-                </code>
-
+                <p><code>employee_no, work_date, time_in, time_out</code></p>
             </div>
 
-
-            <!-- SAMPLE FORMAT -->
             <div class="hint-box">
-
                 <strong>Example:</strong>
-
                 <pre>employee_no,work_date,time_in,time_out
 2023106596,2026-10-01,08:00,17:00
 2023106597,2026-10-01,08:15,17:05
 2023106598,2026-10-01,08:30,</pre>
-
             </div>
 
-
-            <!-- IMPORTANT RULE -->
             <div class="control-note">
-
-                <strong>Important:</strong>
-
-                The employee number in the CSV must match an existing
-                Employee Master Record.
-
-                <br><br>
-
-                If an employee cannot be found, that row will be skipped.
-
+                <strong>Important:</strong> The employee number in the CSV must match an existing Employee Master Record. If an employee cannot be found, that row will be skipped.
             </div>
 
+            <div id="dtr-progress" hidden aria-live="polite" style="margin: 1.25rem 0;">
+                <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center;margin-bottom:.5rem;">
+                    <strong id="dtr-progress-status">Uploading CSV...</strong>
+                    <span id="dtr-progress-percent">0%</span>
+                </div>
+                <progress id="dtr-progress-bar" max="100" value="0" style="width:100%;height:1.2rem;"></progress>
+                <p id="dtr-progress-detail" style="margin-top:.5rem;">Sending file to server.</p>
+            </div>
 
-            <!-- SUBMIT BUTTON -->
-            <button
-                class="btn btn-primary btn-block"
-                type="submit"
-            >
-                Commit Master CSV Data
-            </button>
-
+            <button id="dtr-submit" class="btn btn-primary btn-block" type="submit">Commit Master CSV Data</button>
         </form>
-
     </section>
 
-
-    <!-- ========================= -->
-    <!-- WORKFLOW INFORMATION -->
-    <!-- ========================= -->
-
     <section class="panel">
-
         <h2>DTR Workflow</h2>
-
-        <div class="control-note">
-
-            <strong>Process:</strong>
-
-            <br><br>
-
-            Super Admin uploads the Master DTR
-
-            <br>
-            ↓
-            <br>
-
-            System validates and saves the attendance records
-
-            <br>
-            ↓
-            <br>
-
-            A unique DTR batch is created
-
-            <br>
-            ↓
-            <br>
-
-            Payroll Clerk selects the DTR batch
-
-            <br>
-            ↓
-            <br>
-
-            Payroll Clerk generates payroll
-
-            <br>
-            ↓
-            <br>
-
+        <div class="control-note" style="line-height:1.8;">
+            <strong>Process:</strong><br>
+            Super Admin uploads the Master DTR<br>
+            ↓<br>
+            System validates and saves the attendance records<br>
+            ↓<br>
+            A unique DTR batch is created<br>
+            ↓<br>
+            Payroll Clerk selects the DTR batch<br>
+            ↓<br>
+            Payroll Clerk generates payroll<br>
+            ↓<br>
             Super Admin reviews and approves payroll
-
         </div>
-
     </section>
-
-
-    <!-- ========================= -->
-    <!-- BACK TO DASHBOARD -->
-    <!-- ========================= -->
 
     <section class="panel">
-
-        <a
-            class="btn btn-secondary"
-            href="{{ url_for('dashboard') }}"
-        >
-            Back to Dashboard
-        </a>
-
+        <a class="btn btn-secondary" href="{{ url_for('dashboard') }}">Back to Dashboard</a>
     </section>
-
 </div>
+<script>
+(() => {
+    const form = document.getElementById('dtr-upload-form');
+    if (!form || !window.XMLHttpRequest || !window.FormData) return;
+    const file = document.getElementById('dtr-csv-file');
+    const button = document.getElementById('dtr-submit');
+    const section = document.getElementById('dtr-progress');
+    const bar = document.getElementById('dtr-progress-bar');
+    const percent = document.getElementById('dtr-progress-percent');
+    const status = document.getElementById('dtr-progress-status');
+    const detail = document.getElementById('dtr-progress-detail');
+    const originalButton = button.textContent;
+    let sending = false;
 
+    function restoreButton() {
+        sending = false;
+        button.disabled = false;
+        file.disabled = false;
+        button.textContent = originalButton;
+    }
+    form.addEventListener('submit', event => {
+        if (!file.files.length || sending) {
+            event.preventDefault();
+            return;
+        }
+        event.preventDefault();
+        sending = true;
+        section.hidden = false;
+        bar.value = 0;
+        bar.removeAttribute('value'); // indeterminate until upload progress is available
+        percent.textContent = '0%';
+        status.textContent = 'Uploading CSV...';
+        detail.textContent = 'Transferring file to Flask.';
+        button.disabled = true;
+        file.disabled = true;
+        button.textContent = 'Uploading...';
+
+        const payload = new FormData(form);
+        // File inputs are disabled only after the FormData snapshot is taken.
+        // Because disabled inputs are excluded, append the selected file explicitly.
+        if (!payload.has('file')) payload.append('file', file.files[0]);
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', form.action, true);
+        xhr.upload.onprogress = event => {
+            if (!event.lengthComputable) return;
+            const value = Math.min(100, Math.round(event.loaded / event.total * 100));
+            bar.value = value;
+            percent.textContent = value + '%';
+            if (value === 100) {
+                status.textContent = 'Processing attendance records...';
+                detail.textContent = 'Upload complete. Flask is validating and saving rows to Supabase. Processing progress is not available yet.';
+                button.textContent = 'Processing...';
+                bar.removeAttribute('value');
+            }
+        };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                // Flask follows redirect to dashboard on successful import.
+                const destination = new URL(xhr.responseURL || form.action, window.location.href);
+                if (destination.origin === window.location.origin && destination.pathname !== new URL(form.action).pathname) {
+                    status.textContent = 'Import completed';
+                    window.location.assign(destination.href);
+                    return;
+                }
+                // A server-side validation failure renders the form again with flashed errors.
+                // Display that HTML so its actual error message remains visible.
+                document.open();
+                document.write(xhr.responseText);
+                document.close();
+                return;
+            }
+            status.textContent = 'Upload failed';
+            detail.textContent = 'Server returned HTTP ' + xhr.status + '. Check your Vercel logs and retry.';
+            bar.value = 0;
+            restoreButton();
+        };
+        xhr.onerror = () => {
+            status.textContent = 'Network error';
+            detail.textContent = 'Could not contact the server. Check your connection before trying again.';
+            bar.value = 0;
+            restoreButton();
+        };
+        xhr.ontimeout = () => {
+            status.textContent = 'Request timed out';
+            detail.textContent = 'The import may still have been processed. Check the dashboard before retrying to avoid duplicate uploads.';
+            restoreButton();
+        };
+        xhr.timeout = 120000;
+        xhr.send(payload);
+    });
+})();
+</script>
 {% endblock %}
