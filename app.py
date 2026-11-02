@@ -1747,277 +1747,142 @@ def employees():
 # SUPER ADMIN ONLY
 # =========================================================
 
-@app.route(
-    "/dtr/upload",
-    methods=["GET", "POST"]
-)
+@app.route("/dtr/upload", methods=["GET", "POST"])
 @login_required
 @role_required("super_admin")
 def dtr_upload():
-
-    if request.method == "POST":
-
-        uploaded_file = request.files.get(
-            "file"
-        )
-
-
-        if not uploaded_file:
-
-            flash(
-                "Select a CSV file first.",
-                "error"
-            )
-
-            return render_template(
-                "dtr_upload.html"
-            )
-
-
-        try:
-
-            db = admin_client()
-
-
-            # parse_csv expects bytes.
-            file_bytes = (
-                uploaded_file.read()
-            )
-
-
-            rows = parse_csv(
-                file_bytes
-            )
-
-
-            # Every uploaded Master DTR receives
-            # its own unique batch ID.
-
-            batch_id = str(
-                uuid.uuid4()
-            )
-
-
-            imported = 0
-
-            skipped = 0
-
-
-            for row in rows:
-
-                employee_no = str(
-                    row.get(
-                        "employee_no",
-                        ""
-                    )
-                ).strip()
-
-
-                if not employee_no:
-
-                    skipped += 1
-                    continue
-
-
-                # -------------------------------------------------
-                # FIND EMPLOYEE
-                # -------------------------------------------------
-
-                employee_result = (
-
-                    db.table("employees")
-
-                    .select("*")
-
-                    .eq(
-                        "employee_no",
-                        employee_no
-                    )
-
-                    .limit(1)
-
-                    .execute()
-
-                )
-
-
-                if not employee_result.data:
-
-                    skipped += 1
-                    continue
-
-
-                employee = (
-                    employee_result.data[0]
-                )
-
-
-                # -------------------------------------------------
-                # EVALUATE DTR
-                # -------------------------------------------------
-
-                evaluation = evaluate_day(
-
-                    row.get(
-                        "work_date"
-                    ),
-
-                    row.get(
-                        "time_in"
-                    ),
-
-                    row.get(
-                        "time_out"
-                    ),
-
-                    standard_hours=
-                        employee.get(
-                            "standard_hours",
-                            8
-                        )
-
-                )
-
-
-                # -------------------------------------------------
-                # CONVERT DATETIME VALUES
-                # -------------------------------------------------
-
-                time_in = (
-                    row.get(
-                        "time_in"
-                    )
-                )
-
-                time_out = (
-                    row.get(
-                        "time_out"
-                    )
-                )
-
-
-                if time_in:
-                    time_in = (
-                        time_in.isoformat()
-                    )
-
-
-                if time_out:
-                    time_out = (
-                        time_out.isoformat()
-                    )
-
-
-                payable_hours = (
-                    evaluation.get(
-                        "payable_hours",
-                        0
-                    )
-                )
-
-
-                try:
-                    payable_hours = float(
-                        payable_hours
-                    )
-                except Exception:
-                    payable_hours = 0
-
-
-                # -------------------------------------------------
-                # SAVE DTR
-                # -------------------------------------------------
-
-                (
-
-                    db.table(
-                        "dtr_entries"
-                    )
-
-                    .upsert({
-
-                        "employee_id":
-                            employee["id"],
-
-                        "work_date":
-                            row.get(
-                                "work_date"
-                            ).isoformat()
-                            if row.get(
-                                "work_date"
-                            )
-                            else None,
-
-                        "time_in":
-                            time_in,
-
-                        "time_out":
-                            time_out,
-
-                        "status":
-                            evaluation.get(
-                                "status"
-                            ),
-
-                        "payable_hours":
-                            payable_hours,
-
-                        "reason":
-                            evaluation.get(
-                                "reason"
-                            ),
-
-                        "requires_review":
-                            evaluation.get(
-                                "requires_review",
-                                False
-                            ),
-
-                        "import_batch":
-                            batch_id
-
-                    },
-                    on_conflict=
-                        "employee_id,work_date"
-                    )
-
-                    .execute()
-
-                )
-
-
-                imported += 1
-
-
-            flash(
-                f"Master DTR committed. "
-                f"{imported} imported; "
-                f"{skipped} skipped.",
-                "success"
-            )
-
-
-            return redirect(
-                url_for("dashboard")
-            )
-
-
-        except Exception as e:
-
-            print(
-                "DTR UPLOAD ERROR:",
-                repr(e)
-            )
-
-            flash(
-                f"Could not commit master DTR: {str(e)}",
-                "error"
-            )
-
-
-    return render_template(
-        "dtr_upload.html"
-    )
+    """Create a DTR batch or append only missing entries to an existing batch."""
+    db = admin_client()
+
+    def list_batches():
+        records = (db.table("dtr_entries")
+                   .select("import_batch,work_date")
+                   .order("work_date", desc=True).execute().data or [])
+        grouped = {}
+        for record in records:
+            key, day = record.get("import_batch"), record.get("work_date")
+            if not key:
+                continue
+            if key not in grouped:
+                grouped[key] = {"id": key, "count": 0, "start": day, "end": day}
+            group = grouped[key]
+            group["count"] += 1
+            if day:
+                group["start"] = min(group["start"] or day, day)
+                group["end"] = max(group["end"] or day, day)
+        return sorted(grouped.values(), key=lambda g: g["end"] or "", reverse=True)
+
+    try:
+        batches = list_batches()
+    except Exception:
+        app.logger.exception("DTR BATCH LIST ERROR")
+        flash("Could not load DTR batches. Please try again.", "error")
+        return redirect(url_for("dashboard"))
+
+    if request.method == "GET":
+        return render_template("dtr_upload.html", dtr_batches=batches)
+
+    upload = request.files.get("file")
+    mode = request.form.get("upload_mode", "new")
+    batch_id = request.form.get("batch_id", "").strip()
+    if not upload or not upload.filename:
+        flash("Please select a CSV file.", "error")
+        return redirect(url_for("dtr_upload"))
+    if mode not in ("new", "append"):
+        flash("Invalid upload mode.", "error")
+        return redirect(url_for("dtr_upload"))
+    if mode == "append" and batch_id not in {b["id"] for b in batches}:
+        flash("Select an existing DTR batch.", "error")
+        return redirect(url_for("dtr_upload"))
+
+    try:
+        file_bytes = upload.read(2 * 1024 * 1024 + 1)
+        if len(file_bytes) > 2 * 1024 * 1024:
+            raise ValueError("CSV exceeds the 2 MB upload limit.")
+        parsed = parse_csv(file_bytes)
+        if not parsed:
+            raise ValueError("The CSV contains no attendance rows.")
+        # Avoid duplicate employee/date entries in the same CSV.
+        keys = [(r["employee_no"], r["work_date"].isoformat()) for r in parsed]
+        if len(keys) != len(set(keys)):
+            raise ValueError("CSV contains duplicate employee/date rows. Remove duplicates before uploading.")
+
+        # Preload employee UUIDs. A missing employee is skipped, as in the old importer.
+        employee_numbers = sorted({r["employee_no"] for r in parsed if r["employee_no"]})
+        employee_map = {}
+        for number in employee_numbers:
+            result = (db.table("employees").select("*")
+                      .eq("employee_no", number).limit(1).execute())
+            if result.data:
+                employee_map[number] = result.data[0]
+
+        # Disallow append to any batch whose date range overlaps approved payroll.
+        # Conservative, because historical payroll_runs has no direct batch_id column.
+        if mode == "append":
+            target = next(b for b in batches if b["id"] == batch_id)
+            existing_days = (db.table("dtr_entries")
+                             .select("employee_id,work_date")
+                             .eq("import_batch", batch_id).execute().data or [])
+            old_dates = [r["work_date"] for r in existing_days if r.get("work_date")]
+            incoming_dates = [r["work_date"].isoformat() for r in parsed]
+            low = min(old_dates + incoming_dates)
+            high = max(old_dates + incoming_dates)
+            approved = (db.table("payroll_runs").select("id")
+                        .eq("status", "approved")
+                        .lte("start_date", high).gte("end_date", low)
+                        .limit(1).execute().data or [])
+            if approved:
+                raise ValueError("This batch overlaps an approved payroll period. Append is blocked to protect finalized records.")
+        else:
+            batch_id = str(uuid.uuid4())
+
+        # Preflight: duplicates are SKIPPED, never silently overwritten or reassigned.
+        # Any existing employee/date row, in any batch, stays untouched.
+        prepared = []
+        skipped_missing = 0
+        skipped_existing = 0
+        for row in parsed:
+            employee = employee_map.get(row["employee_no"])
+            if not employee:
+                skipped_missing += 1
+                continue
+            day = row["work_date"].isoformat()
+            prior = (db.table("dtr_entries").select("id")
+                     .eq("employee_id", employee["id"])
+                     .eq("work_date", day).limit(1).execute().data or [])
+            if prior:
+                skipped_existing += 1
+                continue
+            check = evaluate_day(row["work_date"], row["time_in"], row["time_out"],
+                                 standard_hours=employee.get("standard_hours") or 8)
+            prepared.append({
+                "employee_id": employee["id"], "work_date": day,
+                "time_in": row["time_in"].isoformat() if row["time_in"] else None,
+                "time_out": row["time_out"].isoformat() if row["time_out"] else None,
+                "status": check.get("status"),
+                "payable_hours": float(check.get("payable_hours") or 0),
+                "reason": check.get("reason"),
+                "requires_review": check.get("requires_review", False),
+                "import_batch": batch_id
+            })
+
+        if not prepared:
+            flash(f"No new records: {skipped_existing} already exist; {skipped_missing} unmatched employees.", "warning")
+            return redirect(url_for("dtr_upload"))
+
+        # The DB unique constraint employee_id,work_date protects against races.
+        # No upsert: collisions are reported rather than overwriting existing records.
+        for item in prepared:
+            db.table("dtr_entries").insert(item).execute()
+        flash(f"DTR saved: {len(prepared)} new; {skipped_existing} duplicate dates skipped; "
+              f"{skipped_missing} unmatched employees. Batch: {batch_id}", "success")
+        return redirect(url_for("dashboard"))
+    except ValueError as exc:
+        flash(str(exc), "error")
+    except Exception:
+        app.logger.exception("DTR IMPORT / APPEND ERROR")
+        flash("DTR import failed. Some records may already have been saved; review the batch before retrying.", "error")
+    return redirect(url_for("dtr_upload"))
 
 
 # =========================================================
