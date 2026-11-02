@@ -38,6 +38,17 @@
       <button id="dtr-submit" class="btn btn-primary btn-block" type="submit">Commit Master CSV Data</button>
     </form>
   </section>
+  <section class="panel">
+    <h2>Review Imported DTR Batches</h2>
+    {% if dtr_batches %}
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Period</th><th>Records</th><th>Review</th></tr></thead><tbody>
+    {% for batch in dtr_batches %}
+    <tr><td>{{ batch.start }} — {{ batch.end }}</td><td>{{ batch.count }}</td>
+    <td><a class="btn btn-secondary" href="{{ url_for('dtr_review', batch_id=batch.id) }}">Review / Correct</a></td></tr>
+    {% endfor %}
+    </tbody></table></div>
+    {% else %}<p>No batches found.</p>{% endif %}
+  </section>
   <section class="panel"><h2>DTR Workflow</h2><div class="control-note">Super Admin uploads or appends DTR → System validates records → Payroll Clerk selects a batch → Payroll Clerk generates payroll → Super Admin approves.</div></section>
   <section class="panel"><a class="btn btn-secondary" href="{{ url_for('dashboard') }}">Back to Dashboard</a></section>
 </div>
