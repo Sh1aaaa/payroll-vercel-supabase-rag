@@ -1,1 +1,60 @@
+{% extends 'base.html' %}
+{% block title %}Salary Adjustments - BulSU Payroll{% endblock %}
+{% block content %}
+<div class="role-dashboard">
+  <div class="dashboard-heading"><h1>Salary Adjustment Requests</h1>
+    <p>Payroll Clerk proposes rate changes. Super Admin approves or rejects. All decisions are recorded.</p></div>
+  {% if profile.role == 'hr' %}
+  <section class="panel"><h2>Request Hourly Rate Adjustment</h2>
+    <p>For regular employees, the approved hourly rate is converted to a monthly basis using configured workdays and standard hours. This affects future payroll, never historical approved payslips.</p>
+    <form method="POST" action="{{ url_for('salary_adjustments') }}">
+      <input type="hidden" name="salary_csrf" value="{{ csrf_token }}">
+      <label class="field-label" for="employee_id">Employee</label>
+      <select id="employee_id" name="employee_id" required style="width:100%;padding:.7rem;margin-bottom:1rem">
+        <option value="">Choose employee</option>
+        {% for emp in employees %}
+          <option value="{{ emp.id }}">{{ emp.employee_no }} — {{ emp.full_name }} ({{ emp.employee_type }}) — current effective ₱{{ emp.effective_hourly_rate }}/hr</option>
+        {% endfor %}
+      </select>
+      <label class="field-label" for="new_hourly_rate">Proposed Hourly Rate (PHP)</label>
+      <input id="new_hourly_rate" name="new_hourly_rate" type="number" min="0.01" step="0.01" required style="width:100%;padding:.7rem;margin-bottom:1rem" placeholder="350.00">
+      <label class="field-label" for="effective_date">Effective Date</label>
+      <input id="effective_date" name="effective_date" type="date" min="{{ today }}" value="{{ today }}" required style="width:100%;padding:.7rem;margin-bottom:1rem">
+      <label class="field-label" for="reason">Justification</label>
+      <textarea id="reason" name="reason" minlength="10" maxlength="1000" required rows="3" style="width:100%;padding:.7rem;margin-bottom:1rem" placeholder="Provide the authorized reason for the proposed increase"></textarea>
+      <button class="btn btn-primary" type="submit">Submit for Approval</button>
+    </form>
+  </section>
+  {% endif %}
+  <section class="panel"><h2>Request and Decision History</h2>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Employee</th><th>Rate (Before → Proposed)</th><th>Effective</th><th>Requested By</th><th>Reason</th><th>Status</th><th>Decided By</th>{% if profile.role == 'super_admin' %}<th>Action</th>{% endif %}</tr></thead>
+      <tbody>
+        {% for r in salary_requests %}
+        <tr>
+          <td>{{ r.employee_no_snapshot }} — {{ r.employee_name_snapshot }}</td>
+          <td>₱{{ r.old_hourly_rate }} → ₱{{ r.new_hourly_rate }}</td>
+          <td>{{ r.effective_date }}</td>
+          <td>{{ r.requested_by_name }}<small style="display:block">{{ r.created_at }}</small></td>
+          <td>{{ r.reason }}</td>
+          <td>{{ r.status|title }}</td>
+          <td>{{ r.decided_by_name or '—' }}{% if r.decision_note %}<div><small>{{ r.decision_note }}</small></div>{% endif %}</td>
+          {% if profile.role == 'super_admin' %}<td>
+            {% if r.status == 'pending' %}
+              <form method="POST" action="{{ url_for('salary_adjustment_decision', request_id=r.id) }}">
+                <input type="hidden" name="salary_csrf" value="{{ csrf_token }}">
+                <input name="decision_note" maxlength="1000" placeholder="Decision note" style="width:13rem;max-width:100%;padding:.4rem;margin-bottom:.4rem">
+                <button class="btn btn-success" name="decision" value="approve" type="submit" onclick="return confirm('Approve salary change?');">Approve</button>
+                <button class="btn btn-danger" name="decision" value="reject" type="submit" onclick="return confirm('Reject salary change?');">Reject</button>
+              </form>
+            {% else %}—{% endif %}
+          </td>{% endif %}
+        </tr>
+        {% else %}<tr><td colspan="8">No salary adjustments recorded.</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </section>
+  <section class="panel"><a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Back to Dashboard</a></section>
+</div>
+{% endblock %}
 
