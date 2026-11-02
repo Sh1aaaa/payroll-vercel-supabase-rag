@@ -114,6 +114,12 @@
         {% endif %}
     </section>
 
+    <section class="panel">
+        <h2>Salary Adjustments</h2>
+        <p>Request, review, and track approved hourly-rate changes with a named audit history.</p>
+        <a class="btn btn-primary" href="{{ url_for('salary_adjustments') }}">Salary Adjustment Requests</a>
+    </section>
+
     <!-- MASTER DTR -->
 
     <section class="panel">
@@ -226,6 +232,12 @@
             <strong>{{ stats.get('flagged_dtr', 0) }}</strong>
         </div>
     </div>
+
+    <section class="panel">
+        <h2>Salary Adjustments</h2>
+        <p>Request, review, and track approved hourly-rate changes with a named audit history.</p>
+        <a class="btn btn-primary" href="{{ url_for('salary_adjustments') }}">Salary Adjustment Requests</a>
+    </section>
 
     <!-- MASTER DTR BATCH SELECTION: PAYROLL CLERK ONLY -->
     <section class="panel">
