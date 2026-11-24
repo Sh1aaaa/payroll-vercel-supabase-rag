@@ -75,6 +75,75 @@ app.secret_key = os.getenv(
 
 
 # =========================================================
+# COLLEGE AND ROLE SCOPE
+# =========================================================
+
+COLLEGE_OPTIONS = [
+    {"code": "CAFA", "name": "College of Architecture and Fine Arts"},
+    {"code": "CAL", "name": "College of Arts and Letters"},
+    {"code": "CBEA", "name": "College of Business Education and Accountancy"},
+    {"code": "CCJE", "name": "College of Criminal Justice Education"},
+    {"code": "CHTM", "name": "College of Hospitality and Tourism Management"},
+    {"code": "CICT", "name": "College of Information and Communications Technology"},
+    {"code": "CIT", "name": "College of Industrial Technology"},
+    {"code": "CLAW", "name": "College of Law"},
+    {"code": "CN", "name": "College of Nursing"},
+    {"code": "COE", "name": "College of Engineering"},
+    {"code": "CPTED", "name": "College of Professional Teacher Education"},
+    {"code": "CS", "name": "College of Science"},
+    {"code": "CSER", "name": "College of Sports, Exercise and Recreation"},
+    {"code": "CSSP", "name": "College of Social Sciences and Philosophy"},
+]
+
+COLLEGE_NAMES = {item["code"]: item["name"] for item in COLLEGE_OPTIONS}
+EMPLOYEE_TYPES = {
+    "regular", "temporary", "contractual", "casual", "ebjo", "cos", "part_time"
+}
+
+
+def _approved_actor_profile(db=None):
+    """Reload the signed-in profile from Supabase; never trust form/session scope."""
+    uid = session.get("user_id")
+    if not uid:
+        abort(403)
+    db = db or admin_client()
+    rows = (db.table("profiles").select("*")
+            .eq("id", uid).eq("approved", True)
+            .limit(1).execute().data or [])
+    if not rows:
+        abort(403)
+    return rows[0]
+
+
+def _is_system_super_admin(profile):
+    return (
+        profile.get("role") == "super_admin"
+        and profile.get("admin_scope") == "system"
+    )
+
+
+def _actor_college(profile):
+    code = str(profile.get("college_code") or "").strip().upper()
+    if code not in COLLEGE_NAMES:
+        abort(403, description="This account has no valid college assignment.")
+    return code
+
+
+def _ensure_actor_can_access_college(profile, college_code):
+    """System Super Admin sees all colleges; other staff are college-scoped."""
+    if _is_system_super_admin(profile):
+        return True
+    return bool(college_code) and _actor_college(profile) == str(college_code).upper()
+
+
+def _require_system_super_admin(db=None):
+    actor = _approved_actor_profile(db)
+    if not _is_system_super_admin(actor):
+        abort(403, description="Only the System Super Admin can perform final payroll approval.")
+    return actor
+
+
+# =========================================================
 # SALARY ADJUSTMENT HELPERS
 # =========================================================
 
@@ -84,7 +153,7 @@ def _salary_authorized(allowed_roles):
     if not uid:
         abort(403)
     rows = (admin_client().table("profiles")
-            .select("id,full_name,role,approved").eq("id", uid)
+            .select("id,full_name,role,approved,admin_scope,college_code").eq("id", uid)
             .eq("approved", True).limit(1).execute().data or [])
     if not rows or rows[0].get("role") not in allowed_roles:
         abort(403)
@@ -155,12 +224,24 @@ def _payroll_employee_at_date(db, employee, start_date, end_date):
 def salary_adjustments():
     profile = _salary_authorized(("hr", "super_admin"))
     db = admin_client()
+    system_admin = _is_system_super_admin(profile)
+    if profile.get("role") == "super_admin" and profile.get("admin_scope") not in ("system", "college"):
+        abort(403)
+    if profile.get("role") == "hr" and profile.get("admin_scope") != "college":
+        abort(403)
+    college_scope = None if system_admin else _actor_college(profile)
+
     if request.method == "POST":
         _check_salary_csrf()
         if profile["role"] != "hr":
             abort(403)
         try:
             employee_id = request.form.get("employee_id", "").strip()
+            owned_employee = (db.table("employees").select("id")
+                              .eq("id", employee_id).eq("college_code", college_scope)
+                              .eq("active", True).limit(1).execute().data or [])
+            if not owned_employee:
+                raise ValueError("Select an active employee from your assigned college.")
             effective_date = date.fromisoformat(request.form.get("effective_date", ""))
             if effective_date < date.today():
                 raise ValueError("Effective date cannot be in the past")
@@ -168,22 +249,33 @@ def salary_adjustments():
             reason = request.form.get("reason", "").strip()
             if len(reason) < 10 or len(reason) > 1000:
                 raise ValueError("Reason must contain 10 to 1000 characters")
-            result = db.rpc("request_salary_adjustment", {
+            db.rpc("request_salary_adjustment", {
                 "p_employee_id": employee_id,
                 "p_actor": profile["id"],
                 "p_new_rate": str(new_rate),
                 "p_effective_date": effective_date.isoformat(),
                 "p_reason": reason,
             }).execute()
-            flash("Salary adjustment submitted for Super Admin approval.", "success")
+            flash("Salary adjustment submitted for System Super Admin approval.", "success")
         except Exception as exc:
             app.logger.exception("SALARY REQUEST ERROR")
             flash("Unable to submit salary adjustment: " + str(exc), "error")
         return redirect(url_for("salary_adjustments"))
-    employees = (db.table("employees").select("id,employee_no,full_name,employee_type,monthly_salary,hourly_rate,standard_hours,workdays_per_month")
-                 .eq("active", True).order("full_name").execute().data or [])
-    requests = (db.table("salary_adjustments").select("*")
-                .order("created_at", desc=True).limit(200).execute().data or [])
+
+    employees_query = (db.table("employees")
+                       .select("id,employee_no,full_name,employee_type,monthly_salary,hourly_rate,standard_hours,workdays_per_month")
+                       .eq("active", True))
+    if college_scope:
+        employees_query = employees_query.eq("college_code", college_scope)
+    employees = employees_query.order("full_name").execute().data or []
+    employee_ids = [item["id"] for item in employees]
+    requests_query = db.table("salary_adjustments").select("*")
+    if college_scope:
+        if employee_ids:
+            requests_query = requests_query.in_("employee_id", employee_ids)
+        else:
+            requests_query = requests_query.eq("employee_id", "00000000-0000-0000-0000-000000000000")
+    requests = requests_query.order("created_at", desc=True).limit(200).execute().data or []
     for item in employees:
         effective = _approved_hourly_rate(db, item, date.today().isoformat())
         if effective is None:
@@ -202,6 +294,8 @@ def salary_adjustments():
 @login_required
 def salary_adjustment_decision(request_id):
     profile = _salary_authorized(("super_admin",))
+    if not _is_system_super_admin(profile):
+        abort(403)
     _check_salary_csrf()
     action = request.form.get("decision", "")
     if action not in ("approve", "reject"):
@@ -260,401 +354,131 @@ def index():
     methods=["GET", "POST"]
 )
 def staff_register():
-
+    """Public staff signup. Only the first secret-verified account is system-scoped."""
     db = admin_client()
-
-    # -----------------------------------------------------
-    # CHECK IF SUPER ADMIN EXISTS
-    # -----------------------------------------------------
-
     try:
-
-        result = (
-            db.table("profiles")
-            .select("id")
-            .eq(
-                "role",
-                "super_admin"
-            )
-            .limit(1)
-            .execute()
+        system_admins = (
+            db.table("profiles").select("id")
+            .eq("role", "super_admin")
+            .eq("admin_scope", "system")
+            .limit(1).execute().data or []
         )
-
-        has_super_admin = bool(
-            result.data
-        )
-
-    except Exception as e:
-
-        print(
-            "STAFF ADMIN CHECK ERROR:",
-            repr(e)
-        )
-
-        flash(
-            f"Could not check Super Admin status: {str(e)}",
-            "error"
-        )
-
-        return redirect(
-            url_for("login")
-        )
-
-
-    # =====================================================
-    # POST
-    # =====================================================
+        has_super_admin = bool(system_admins)
+    except Exception as exc:
+        app.logger.exception("STAFF ADMIN CHECK ERROR")
+        flash(f"Could not check System Super Admin status: {exc}", "error")
+        return redirect(url_for("login"))
 
     if request.method == "POST":
-
-        full_name = request.form.get(
-            "full_name",
-            ""
-        ).strip()
-
-        employee_id = request.form.get(
-            "employee_id",
-            ""
-        ).strip()
-
-        email = request.form.get(
-            "email",
-            ""
-        ).strip().lower()
-
-        password = request.form.get(
-            "password",
-            ""
-        )
-
-        confirm_password = request.form.get(
-            "confirm_password",
-            ""
-        )
-
-        requested_role = request.form.get(
-            "role",
-            ""
-        ).strip()
-
-
-        # =================================================
-        # FIRST SUPER ADMIN
-        # =================================================
+        full_name = request.form.get("full_name", "").strip()
+        employee_id = request.form.get("employee_id", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        requested_role = request.form.get("role", "").strip()
+        college_code = request.form.get("college_code", "").strip().upper()
 
         if not has_super_admin:
-
             role = "super_admin"
-
-            submitted_secret = request.form.get(
-                "admin_setup_secret",
-                ""
-            ).strip()
-
-            expected_secret = os.getenv(
-                "ADMIN_SETUP_SECRET"
-            )
-
-
+            admin_scope = "system"
+            college_code = None
+            submitted_secret = request.form.get("admin_setup_secret", "").strip()
+            expected_secret = os.getenv("ADMIN_SETUP_SECRET")
             if not expected_secret:
-
-                flash(
-                    "ADMIN_SETUP_SECRET is not configured.",
-                    "error"
-                )
-
+                flash("ADMIN_SETUP_SECRET is not configured.", "error")
                 return render_template(
-                    "staff_register.html",
-                    has_super_admin=False
+                    "staff_register.html", has_super_admin=False,
+                    college_options=COLLEGE_OPTIONS,
                 )
-
-
-            if not hmac.compare_digest(
-                submitted_secret,
-                expected_secret
-            ):
-
-                flash(
-                    "Invalid Admin Setup Secret.",
-                    "error"
-                )
-
+            if not hmac.compare_digest(submitted_secret, expected_secret):
+                flash("Invalid Admin Setup Secret.", "error")
                 return render_template(
-                    "staff_register.html",
-                    has_super_admin=False
+                    "staff_register.html", has_super_admin=False,
+                    college_options=COLLEGE_OPTIONS,
                 )
-
+            approved = True
         else:
-
-            # =================================================
-            # AFTER FIRST SUPER ADMIN
-            # =================================================
-
-            if requested_role not in (
-                "hr",
-                "super_admin"
-            ):
-
-                flash(
-                    "Please select Payroll Clerk or Super Admin.",
-                    "error"
-                )
-
+            if requested_role not in ("hr", "super_admin"):
+                flash("Please select Payroll Clerk or College Super Admin.", "error")
                 return render_template(
-                    "staff_register.html",
-                    has_super_admin=True
+                    "staff_register.html", has_super_admin=True,
+                    college_options=COLLEGE_OPTIONS,
                 )
-
             role = requested_role
-
-
-        # =================================================
-        # VALIDATION
-        # =================================================
+            admin_scope = "college"
+            approved = False
+            if college_code not in COLLEGE_NAMES:
+                flash("Please select the college this account belongs to.", "error")
+                return render_template(
+                    "staff_register.html", has_super_admin=True,
+                    college_options=COLLEGE_OPTIONS,
+                )
 
         if not full_name:
-
-            flash(
-                "Full name is required.",
-                "error"
-            )
-
-            return render_template(
-                "staff_register.html",
-                has_super_admin=has_super_admin
-            )
-
-
-        if not employee_id:
-
-            flash(
-                "School / Employee ID is required.",
-                "error"
-            )
-
-            return render_template(
-                "staff_register.html",
-                has_super_admin=has_super_admin
-            )
-
-
+            flash("Full name is required.", "error")
+            return render_template("staff_register.html", has_super_admin=has_super_admin, college_options=COLLEGE_OPTIONS)
+        if has_super_admin and not employee_id:
+            flash("School / Employee ID is required.", "error")
+            return render_template("staff_register.html", has_super_admin=has_super_admin, college_options=COLLEGE_OPTIONS)
         if not email:
-
-            flash(
-                "Email is required.",
-                "error"
-            )
-
-            return render_template(
-                "staff_register.html",
-                has_super_admin=has_super_admin
-            )
-
-
+            flash("Email is required.", "error")
+            return render_template("staff_register.html", has_super_admin=has_super_admin, college_options=COLLEGE_OPTIONS)
         if len(password) < 6:
-
-            flash(
-                "Password must contain at least 6 characters.",
-                "error"
-            )
-
-            return render_template(
-                "staff_register.html",
-                has_super_admin=has_super_admin
-            )
-
-
+            flash("Password must contain at least 6 characters.", "error")
+            return render_template("staff_register.html", has_super_admin=has_super_admin, college_options=COLLEGE_OPTIONS)
         if password != confirm_password:
-
-            flash(
-                "Passwords do not match.",
-                "error"
-            )
-
-            return render_template(
-                "staff_register.html",
-                has_super_admin=has_super_admin
-            )
-
-
-        # =================================================
-        # DUPLICATE EMPLOYEE ID
-        # =================================================
-
-        try:
-
-            existing_id = (
-                db.table("profiles")
-                .select(
-                    "id,"
-                    "full_name,"
-                    "role"
-                )
-                .eq(
-                    "employee_id",
-                    employee_id
-                )
-                .limit(1)
-                .execute()
-            )
-
-
-            if existing_id.data:
-
-                flash(
-                    "That School / Employee ID is already registered.",
-                    "error"
-                )
-
-                return render_template(
-                    "staff_register.html",
-                    has_super_admin=has_super_admin
-                )
-
-        except Exception as e:
-
-            print(
-                "EMPLOYEE ID CHECK ERROR:",
-                repr(e)
-            )
-
-            flash(
-                f"Could not check Employee ID: {str(e)}",
-                "error"
-            )
-
-            return render_template(
-                "staff_register.html",
-                has_super_admin=has_super_admin
-            )
-
-
-        # =================================================
-        # CREATE AUTH ACCOUNT
-        # =================================================
+            flash("Passwords do not match.", "error")
+            return render_template("staff_register.html", has_super_admin=has_super_admin, college_options=COLLEGE_OPTIONS)
 
         user = None
-
         try:
-
-            auth_result = (
-                db.auth.admin.create_user({
-                    "email": email,
-                    "password": password,
-                    "email_confirm": True,
-
-                    "user_metadata": {
-                        "full_name": full_name
-                    }
-                })
-            )
-
-            user = auth_result.user
-
-
-            if not user:
-
-                raise RuntimeError(
-                    "Supabase did not return the created user."
+            if employee_id:
+                existing_id = (
+                    db.table("profiles").select("id")
+                    .eq("employee_id", employee_id).limit(1).execute().data or []
                 )
+                if existing_id:
+                    raise ValueError("That School / Employee ID is already registered.")
 
-
-            user_id = str(
-                user.id
-            )
-
-
-            # First Super Admin is automatically approved.
-
-            approved = not has_super_admin
-
-
-            # =================================================
-            # CREATE PROFILE
-            # =================================================
+            auth_result = db.auth.admin.create_user({
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {"full_name": full_name},
+            })
+            user = auth_result.user
+            if not user:
+                raise RuntimeError("Supabase did not return the created user.")
 
             db.table("profiles").upsert({
-
-                "id":
-                    user_id,
-
-                "full_name":
-                    full_name,
-
-                "employee_id":
-                    employee_id,
-
-                "role":
-                    role,
-
-                "approved":
-                    approved
-
+                "id": str(user.id),
+                "full_name": full_name,
+                "employee_id": employee_id or None,
+                "role": role,
+                "approved": approved,
+                "admin_scope": admin_scope,
+                "college_code": college_code,
             }).execute()
 
-
-            if approved:
-
-                flash(
-                    "Initial Super Admin created successfully. "
-                    "You can now sign in.",
-                    "success"
-                )
-
+            if admin_scope == "system":
+                flash("Initial System Super Admin created successfully. You can now sign in.", "success")
             else:
-
-                if role == "hr":
-                    role_name = "Payroll Clerk"
-
-                else:
-                    role_name = "Super Admin"
-
-
-                flash(
-                    f"{role_name} registration successful. "
-                    "Please wait for Super Admin approval.",
-                    "success"
-                )
-
-
-            return redirect(
-                url_for("login")
-            )
-
-
-        except Exception as e:
-
-            print(
-                "STAFF REGISTRATION ERROR:",
-                repr(e)
-            )
-
-
+                role_name = "College Super Admin" if role == "super_admin" else "College Payroll Clerk"
+                flash(f"{role_name} registration submitted for System Super Admin approval.", "success")
+            return redirect(url_for("login"))
+        except Exception as exc:
+            app.logger.exception("STAFF REGISTRATION ERROR")
             if user is not None:
-
                 try:
-
-                    db.auth.admin.delete_user(
-                        str(user.id)
-                    )
-
-                except Exception as cleanup_error:
-
-                    print(
-                        "CLEANUP ERROR:",
-                        repr(cleanup_error)
-                    )
-
-
-            flash(
-                f"Staff registration failed: {str(e)}",
-                "error"
-            )
-
+                    db.auth.admin.delete_user(str(user.id))
+                except Exception:
+                    app.logger.exception("STAFF REGISTRATION CLEANUP ERROR")
+            flash(f"Staff registration failed: {exc}", "error")
 
     return render_template(
         "staff_register.html",
-        has_super_admin=has_super_admin
+        has_super_admin=has_super_admin,
+        college_options=COLLEGE_OPTIONS,
     )
 
 
@@ -758,7 +582,10 @@ def login():
                     "full_name,"
                     "employee_id,"
                     "role,"
-                    "approved"
+                    "approved,"
+                    "admin_scope,"
+                    "college_code,"
+                    "employee_type"
                 )
 
                 .eq(
@@ -842,6 +669,9 @@ def login():
                 or "employee"
             )
 
+            session["admin_scope"] = profile.get("admin_scope")
+            session["college_code"] = profile.get("college_code")
+
 
             return redirect(
                 url_for("dashboard")
@@ -875,231 +705,75 @@ def login():
     methods=["GET", "POST"]
 )
 def register():
-
     if request.method == "POST":
-
-        full_name = request.form.get(
-            "full_name",
-            ""
-        ).strip()
-
-        employee_id = request.form.get(
-            "employee_id",
-            ""
-        ).strip()
-
-        email = request.form.get(
-            "email",
-            ""
-        ).strip().lower()
-
-        password = request.form.get(
-            "password",
-            ""
-        )
-
-        confirm_password = request.form.get(
-            "confirm_password",
-            ""
-        )
-
-
-        # =================================================
-        # VALIDATION
-        # =================================================
+        full_name = request.form.get("full_name", "").strip()
+        employee_id = request.form.get("employee_id", "").strip()
+        employee_type = request.form.get("employee_type", "").strip().lower()
+        college_code = request.form.get("college_code", "").strip().upper()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
 
         if not full_name:
-
-            flash(
-                "Full name is required.",
-                "error"
-            )
-
-            return render_template(
-                "register.html"
-            )
-
-
-        if not employee_id:
-
-            flash(
-                "School / Employee ID is required.",
-                "error"
-            )
-
-            return render_template(
-                "register.html"
-            )
-
-
-        if not email:
-
-            flash(
-                "Email is required.",
-                "error"
-            )
-
-            return render_template(
-                "register.html"
-            )
-
-
-        if len(password) < 6:
-
-            flash(
-                "Password must contain at least 6 characters.",
-                "error"
-            )
-
-            return render_template(
-                "register.html"
-            )
-
-
-        if password != confirm_password:
-
-            flash(
-                "Passwords do not match.",
-                "error"
-            )
-
-            return render_template(
-                "register.html"
-            )
-
-
-        try:
-
+            flash("Full name is required.", "error")
+        elif not employee_id:
+            flash("School / Employee ID is required.", "error")
+        elif employee_type not in EMPLOYEE_TYPES:
+            flash("Please select a valid employee type.", "error")
+        elif college_code not in COLLEGE_NAMES:
+            flash("Please select your college / department.", "error")
+        elif not email:
+            flash("Email is required.", "error")
+        elif len(password) < 6:
+            flash("Password must contain at least 6 characters.", "error")
+        elif password != confirm_password:
+            flash("Passwords do not match.", "error")
+        else:
             db = admin_client()
-
-
-            # =================================================
-            # CHECK DUPLICATE EMPLOYEE ID
-            # =================================================
-
-            existing_id = (
-
-                db.table("profiles")
-
-                .select("id")
-
-                .eq(
-                    "employee_id",
-                    employee_id
+            user = None
+            try:
+                existing_id = (
+                    db.table("profiles").select("id")
+                    .eq("employee_id", employee_id).limit(1).execute().data or []
                 )
+                if existing_id:
+                    raise ValueError("That School / Employee ID is already registered.")
 
-                .limit(1)
-
-                .execute()
-
-            )
-
-
-            if existing_id.data:
-
-                flash(
-                    "That School / Employee ID is already registered.",
-                    "error"
-                )
-
-                return render_template(
-                    "register.html"
-                )
-
-
-            # =================================================
-            # CREATE AUTH USER
-            # =================================================
-
-            auth_result = (
-                db.auth.admin.create_user({
-
-                    "email":
-                        email,
-
-                    "password":
-                        password,
-
-                    "email_confirm":
-                        True,
-
-                    "user_metadata": {
-                        "full_name":
-                            full_name
-                    }
-
+                auth_result = db.auth.admin.create_user({
+                    "email": email,
+                    "password": password,
+                    "email_confirm": True,
+                    "user_metadata": {"full_name": full_name},
                 })
-            )
+                user = auth_result.user
+                if not user:
+                    raise RuntimeError("Supabase did not return the created user.")
 
+                db.table("profiles").upsert({
+                    "id": str(user.id),
+                    "full_name": full_name,
+                    "employee_id": employee_id,
+                    "employee_type": employee_type,
+                    "college_code": college_code,
+                    "role": "employee",
+                    "approved": False,
+                    "admin_scope": None,
+                }).execute()
 
-            user = (
-                auth_result.user
-            )
-
-
-            if not user:
-
-                raise RuntimeError(
-                    "Supabase did not return the created user."
-                )
-
-
-            user_id = str(
-                user.id
-            )
-
-
-            # =================================================
-            # CREATE PROFILE
-            # =================================================
-
-            db.table("profiles").upsert({
-
-                "id":
-                    user_id,
-
-                "full_name":
-                    full_name,
-
-                "employee_id":
-                    employee_id,
-
-                "role":
-                    "employee",
-
-                "approved":
-                    False
-
-            }).execute()
-
-
-            flash(
-                "Registration successful. "
-                "Please wait for Super Admin approval.",
-                "success"
-            )
-
-
-            return redirect(
-                url_for("login")
-            )
-
-
-        except Exception as e:
-
-            print(
-                "REGISTER ERROR:",
-                repr(e)
-            )
-
-            flash(
-                f"Registration error: {str(e)}",
-                "error"
-            )
-
+                flash("Registration successful. Please wait for your College Super Admin or System Super Admin approval.", "success")
+                return redirect(url_for("login"))
+            except Exception as exc:
+                app.logger.exception("EMPLOYEE REGISTRATION ERROR")
+                if user is not None:
+                    try:
+                        db.auth.admin.delete_user(str(user.id))
+                    except Exception:
+                        app.logger.exception("EMPLOYEE REGISTRATION CLEANUP ERROR")
+                flash(f"Registration error: {exc}", "error")
 
     return render_template(
-        "register.html"
+        "register.html",
+        college_options=COLLEGE_OPTIONS,
     )
 
 
@@ -1197,13 +871,17 @@ def dashboard():
         return redirect(url_for("login"))
 
     db = admin_client()
-    role = profile.get("role", "employee")
-    stats = {
-        "employees": 0,
-        "pending_accounts": 0,
-        "flagged_dtr": 0,
-        "pending_payroll": 0,
-    }
+    actor = _approved_actor_profile(db)
+    role = actor.get("role", "employee")
+    system_admin = _is_system_super_admin(actor)
+    college_scope = None if system_admin else actor.get("college_code")
+
+    if role in ("super_admin", "hr") and not system_admin:
+        college_scope = _actor_college(actor)
+    elif role == "super_admin" and not system_admin:
+        abort(403)
+
+    stats = {"employees": 0, "pending_accounts": 0, "flagged_dtr": 0, "pending_payroll": 0}
     pending_users = []
     payroll_runs = []
     dtr_batches = []
@@ -1214,99 +892,100 @@ def dashboard():
 
     if role in ("super_admin", "hr"):
         try:
-            result = (
-                db.table("employees").select("id", count="exact")
-                .eq("active", True).execute()
-            )
+            emp_query = db.table("employees").select("id", count="exact").eq("active", True)
+            if college_scope:
+                emp_query = emp_query.eq("college_code", college_scope)
+            result = emp_query.execute()
             stats["employees"] = result.count or 0
         except Exception:
             app.logger.exception("EMPLOYEE COUNT ERROR")
 
         try:
-            result = (
-                db.table("dtr_entries").select("id", count="exact")
-                .eq("requires_review", True).execute()
-            )
+            flagged_query = db.table("dtr_entries").select("id", count="exact").eq("requires_review", True)
+            if college_scope:
+                flagged_query = flagged_query.eq("college_code", college_scope)
+            result = flagged_query.execute()
             stats["flagged_dtr"] = result.count or 0
         except Exception:
             app.logger.exception("FLAGGED DTR ERROR")
 
+        try:
+            dtr_query = db.table("dtr_entries").select("import_batch,work_date,requires_review,college_code").order("work_date")
+            if college_scope:
+                dtr_query = dtr_query.eq("college_code", college_scope)
+            dtr_rows = dtr_query.execute().data or []
+            grouped = {}
+            for row in dtr_rows:
+                batch_id = row.get("import_batch")
+                day = row.get("work_date")
+                code = row.get("college_code")
+                if not batch_id:
+                    continue
+                if batch_id not in grouped:
+                    grouped[batch_id] = {
+                        "id": batch_id, "start_date": day, "end_date": day,
+                        "records": 0, "flagged": 0, "college_code": code,
+                    }
+                batch = grouped[batch_id]
+                batch["records"] += 1
+                if row.get("requires_review"):
+                    batch["flagged"] += 1
+                if day:
+                    batch["start_date"] = min(batch["start_date"] or day, day)
+                    batch["end_date"] = max(batch["end_date"] or day, day)
+            for batch in grouped.values():
+                batch["college_name"] = COLLEGE_NAMES.get(batch.get("college_code"), "Unassigned")
+            dtr_batches = sorted(grouped.values(), key=lambda item: item.get("start_date") or "", reverse=True)
+        except Exception:
+            app.logger.exception("DTR BATCH LOAD ERROR")
+
     if role == "super_admin":
         try:
-            pending_users = (
+            pending_query = (
                 db.table("profiles")
-                .select("id,full_name,employee_id,role,approved,created_at")
+                .select("id,full_name,employee_id,role,approved,created_at,college_code,employee_type,admin_scope")
                 .eq("approved", False)
-                .order("created_at").execute().data or []
             )
+            if not system_admin:
+                pending_query = pending_query.eq("college_code", college_scope).eq("role", "employee")
+            pending_users = pending_query.order("created_at").execute().data or []
             stats["pending_accounts"] = len(pending_users)
         except Exception:
             app.logger.exception("PENDING USER ERROR")
 
         try:
-            payroll_runs = (
-                db.table("payroll_runs").select("*")
-                .eq("status", "draft")
-                .order("created_at", desc=True).execute().data or []
-            )
+            runs_query = db.table("payroll_runs").select("*").eq("status", "draft")
+            if college_scope:
+                runs_query = runs_query.eq("college_code", college_scope)
+            payroll_runs = runs_query.order("created_at", desc=True).execute().data or []
             stats["pending_payroll"] = len(payroll_runs)
         except Exception:
             app.logger.exception("PENDING PAYROLL ERROR")
 
     elif role == "hr":
         try:
-            dtr_rows = (
-                db.table("dtr_entries")
-                .select("import_batch,work_date,requires_review")
-                .order("work_date").execute().data or []
-            )
-            grouped = {}
-            for row in dtr_rows:
-                batch_id = row.get("import_batch")
-                work_date = row.get("work_date")
-                if not batch_id:
-                    continue
-                if batch_id not in grouped:
-                    grouped[batch_id] = {
-                        "id": batch_id,
-                        "start_date": work_date,
-                        "end_date": work_date,
-                        "records": 0,
-                        "flagged": 0,
-                    }
-                batch = grouped[batch_id]
-                batch["records"] += 1
-                if row.get("requires_review"):
-                    batch["flagged"] += 1
-                if work_date:
-                    if not batch["start_date"] or work_date < batch["start_date"]:
-                        batch["start_date"] = work_date
-                    if not batch["end_date"] or work_date > batch["end_date"]:
-                        batch["end_date"] = work_date
-            dtr_batches = sorted(
-                grouped.values(),
-                key=lambda batch: batch.get("start_date") or "",
-                reverse=True,
-            )
-        except Exception:
-            app.logger.exception("DTR BATCH LOAD ERROR")
-
-        try:
-            payroll_runs = (
-                db.table("payroll_runs").select("*")
-                .order("created_at", desc=True).limit(10)
-                .execute().data or []
-            )
+            runs_query = db.table("payroll_runs").select("*")
+            if college_scope:
+                runs_query = runs_query.eq("college_code", college_scope)
+            payroll_runs = runs_query.order("created_at", desc=True).limit(10).execute().data or []
         except Exception:
             app.logger.exception("CLERK PAYROLL ERROR")
 
+        # A selected batch must still belong to this Payroll Clerk's college.
+        if selected_dtr_batch:
+            selected_rows = (db.table("dtr_entries").select("college_code")
+                             .eq("import_batch", selected_dtr_batch).limit(1).execute().data or [])
+            if not selected_rows or selected_rows[0].get("college_code") != college_scope:
+                session.pop("selected_dtr_batch", None)
+                session.pop("selected_dtr_start_date", None)
+                session.pop("selected_dtr_end_date", None)
+                session.pop("selected_dtr_college_code", None)
+                selected_dtr_batch = None
+
     else:
         try:
-            result = (
-                db.table("employees").select("*")
-                .eq("profile_id", profile["id"])
-                .limit(1).execute()
-            )
+            result = (db.table("employees").select("*")
+                      .eq("profile_id", actor["id"]).limit(1).execute())
             if result.data:
                 employee = result.data[0]
 
@@ -1314,36 +993,25 @@ def dashboard():
                 attendance_records = (
                     db.table("dtr_entries").select("*")
                     .eq("employee_id", employee["id"])
-                    .order("work_date", desc=True)
-                    .execute().data or []
+                    .order("work_date", desc=True).execute().data or []
                 )
-
-                # Retrieve only this employee's payroll items.
                 payroll_items = (
                     db.table("payroll_items").select("*")
-                    .eq("employee_id", employee["id"])
-                    .execute().data or []
+                    .eq("employee_id", employee["id"]).execute().data or []
                 )
-
-                # Publish only payroll that the Super Admin approved.
-                # The employee cannot access the staff payroll detail route.
                 for item in payroll_items:
                     run_id = item.get("payroll_run_id")
                     if not run_id:
                         continue
                     run_result = (
                         db.table("payroll_runs")
-                        .select("id,start_date,end_date,cutoff_no,status")
-                        .eq("id", run_id)
-                        .eq("status", "approved")
+                        .select("id,start_date,end_date,cutoff_no,status,college_code")
+                        .eq("id", run_id).eq("status", "approved")
                         .limit(1).execute()
                     )
                     if run_result.data:
                         approved_item = dict(item)
                         approved_item["payroll_run"] = run_result.data[0]
-
-                        # Fetch the itemized deductions saved during payroll generation.
-                        # Never substitute assumed statutory contribution amounts.
                         approved_item["deduction_details"] = []
                         approved_item["deductions_loaded"] = False
                         try:
@@ -1353,24 +1021,16 @@ def dashboard():
                                 .eq("payroll_item_id", item["id"])
                                 .execute()
                             )
-                            approved_item["deduction_details"] = (
-                                deduction_result.data or []
-                            )
+                            approved_item["deduction_details"] = deduction_result.data or []
                             approved_item["deductions_loaded"] = True
                         except Exception:
-                            app.logger.exception(
-                                "PAYROLL DEDUCTION DETAILS ERROR for item %s",
-                                item.get("id"),
-                            )
-
+                            app.logger.exception("PAYROLL DEDUCTION DETAILS ERROR for item %s", item.get("id"))
                         employee_payroll.append(approved_item)
-
                 employee_payroll.sort(
                     key=lambda item: (
                         item["payroll_run"].get("end_date") or "",
                         item["payroll_run"].get("start_date") or "",
-                    ),
-                    reverse=True,
+                    ), reverse=True
                 )
         except Exception:
             app.logger.exception("EMPLOYEE DASHBOARD ERROR")
@@ -1378,7 +1038,7 @@ def dashboard():
 
     return render_template(
         "dashboard.html",
-        profile=profile,
+        profile=actor,
         stats=stats,
         pending_users=pending_users,
         payroll_runs=payroll_runs,
@@ -1401,246 +1061,86 @@ def dashboard():
 @login_required
 @role_required("super_admin")
 def approve_user(user_id):
-
+    db = admin_client()
     try:
+        actor = _approved_actor_profile(db)
+        if actor.get("role") != "super_admin" or actor.get("admin_scope") not in ("system", "college"):
+            abort(403)
 
-        db = admin_client()
+        rows = (db.table("profiles").select("*")
+                .eq("id", user_id).eq("approved", False)
+                .limit(1).execute().data or [])
+        if not rows:
+            flash("Pending registration not found.", "error")
+            return redirect(url_for("dashboard"))
+        user = rows[0]
+        user_role = user.get("role")
+        college_code = str(user.get("college_code") or "").upper()
 
-
-        # =================================================
-        # GET USER PROFILE
-        # =================================================
-
-        result = (
-
-            db.table("profiles")
-
-            .select(
-                "id,"
-                "full_name,"
-                "employee_id,"
-                "role,"
-                "approved"
-            )
-
-            .eq(
-                "id",
-                user_id
-            )
-
-            .limit(1)
-
-            .execute()
-
-        )
-
-
-        if not result.data:
-
-            flash(
-                "Registration not found.",
-                "error"
-            )
-
-            return redirect(
-                url_for("dashboard")
-            )
-
-
-        user = (
-            result.data[0]
-        )
-
-
-        user_role = (
-            user.get(
-                "role"
-            )
-        )
-
-
-        full_name = (
-            user.get(
-                "full_name"
-            )
-            or ""
-        )
-
-
-        employee_id = (
-            user.get(
-                "employee_id"
-            )
-            or ""
-        )
-
-
-        # =================================================
-        # APPROVE PROFILE
-        # =================================================
-
-        db.table("profiles").update({
-
-            "approved":
-                True
-
-        }).eq(
-            "id",
-            user_id
-        ).execute()
-
-
-        # =================================================
-        # NORMAL EMPLOYEE
-        # =================================================
+        # College Super Admins may approve employees in their own college only.
+        # Only the System Super Admin may approve staff/admin accounts.
+        if _is_system_super_admin(actor):
+            pass
+        else:
+            actor_college = _actor_college(actor)
+            if user_role != "employee" or college_code != actor_college:
+                abort(403, description="College Super Admins can approve employee accounts in their own college only.")
 
         if user_role == "employee":
+            employee_type = str(user.get("employee_type") or "").lower()
+            if employee_type not in EMPLOYEE_TYPES:
+                raise ValueError("The employee has no valid employee type. Ask them to submit registration again or correct the pending profile.")
+            if college_code not in COLLEGE_NAMES:
+                raise ValueError("The employee has no valid college assignment.")
+            employee_no = str(user.get("employee_id") or "").strip()
+            if not employee_no:
+                raise ValueError("School / Employee ID is required before approval.")
 
-            if not employee_id:
-
-                flash(
-                    "Employee approved, but no School / Employee ID was provided.",
-                    "warning"
-                )
-
-                return redirect(
-                    url_for("dashboard")
-                )
-
-
-            # -------------------------------------------------
-            # CHECK EMPLOYEE RECORD
-            # -------------------------------------------------
-
-            existing_employee = (
-
-                db.table("employees")
-
-                .select(
-                    "id,"
-                    "employee_no"
-                )
-
-                .eq(
-                    "employee_no",
-                    employee_id
-                )
-
-                .limit(1)
-
-                .execute()
-
-            )
-
-
-            # -------------------------------------------------
-            # CREATE EMPLOYEE RECORD
-            # -------------------------------------------------
-
-            if not existing_employee.data:
-
-                db.table(
-                    "employees"
-                ).insert({
-
-                    "profile_id":
-                        user_id,
-
-                    "employee_no":
-                        employee_id,
-
-                    "full_name":
-                        full_name,
-
-                    # IMPORTANT:
-                    # Database constraint requires lowercase.
-                    "employee_type":
-                        "regular",
-
-                    "department":
-                        "",
-
-                    "monthly_salary":
-                        0,
-
-                    "hourly_rate":
-                        0,
-
-                    "standard_hours":
-                        8,
-
-                    "workdays_per_month":
-                        22,
-
-                    "active":
-                        True
-
-                }).execute()
-
-
-                flash(
-                    f"{full_name} approved and added "
-                    f"to Employee Master Records.",
-                    "success"
-                )
-
+            existing = (db.table("employees").select("*")
+                        .eq("employee_no", employee_no).limit(1).execute().data or [])
+            if existing:
+                existing_employee = existing[0]
+                existing_college = existing_employee.get("college_code")
+                if existing_college and existing_college != college_code:
+                    raise ValueError("An employee record with this ID is already assigned to a different college.")
+                if existing_employee.get("profile_id") not in (None, user_id):
+                    raise ValueError("This employee number is already linked to another profile.")
+                db.table("employees").update({
+                    "profile_id": user_id,
+                    "college_code": college_code,
+                    "employee_type": employee_type,
+                }).eq("id", existing_employee["id"]).execute()
             else:
-
-                flash(
-                    f"{full_name} approved successfully. "
-                    f"Employee record already exists.",
-                    "success"
-                )
-
-
-        # =================================================
-        # PAYROLL CLERK
-        # =================================================
-
-        elif user_role == "hr":
-
-            flash(
-                f"{full_name} approved as Payroll Clerk.",
-                "success"
-            )
-
-
-        # =================================================
-        # SUPER ADMIN
-        # =================================================
-
-        elif user_role == "super_admin":
-
-            flash(
-                f"{full_name} approved as Super Admin.",
-                "success"
-            )
-
-
+                db.table("employees").insert({
+                    "profile_id": user_id,
+                    "employee_no": employee_no,
+                    "full_name": user.get("full_name") or "",
+                    "employee_type": employee_type,
+                    "college_code": college_code,
+                    "department": "",
+                    "monthly_salary": 0,
+                    "hourly_rate": 0,
+                    "standard_hours": 8,
+                    "workdays_per_month": 22,
+                    "active": True,
+                }).execute()
+            role_label = "employee"
+        elif user_role in ("super_admin", "hr"):
+            if not _is_system_super_admin(actor):
+                abort(403)
+            if college_code not in COLLEGE_NAMES or user.get("admin_scope") != "college":
+                raise ValueError("A College Super Admin or Payroll Clerk must have a valid college assignment.")
+            role_label = "College Super Admin" if user_role == "super_admin" else "College Payroll Clerk"
         else:
+            raise ValueError("Unsupported registration role.")
 
-            flash(
-                f"{full_name} approved successfully.",
-                "success"
-            )
+        db.table("profiles").update({"approved": True}).eq("id", user_id).execute()
+        flash(f"{user.get('full_name') or 'Account'} approved as {role_label}.", "success")
+    except Exception as exc:
+        app.logger.exception("APPROVE USER ERROR")
+        flash(f"Could not approve registration: {exc}", "error")
 
-
-    except Exception as e:
-
-        print(
-            "APPROVE USER ERROR:",
-            repr(e)
-        )
-
-        flash(
-            f"Could not approve registration: {str(e)}",
-            "error"
-        )
-
-
-    return redirect(
-        url_for("dashboard")
-    )
+    return redirect(url_for("dashboard"))
 
 
 # =========================================================
@@ -1654,80 +1154,31 @@ def approve_user(user_id):
 @login_required
 @role_required("super_admin")
 def reject_user(user_id):
-
     try:
-
         db = admin_client()
-
-
-        # -------------------------------------------------
-        # DELETE AUTH ACCOUNT
-        # -------------------------------------------------
-
+        actor = _approved_actor_profile(db)
+        target_rows = (db.table("profiles").select("id,role,college_code")
+                       .eq("id", user_id).eq("approved", False)
+                       .limit(1).execute().data or [])
+        if not target_rows:
+            flash("Pending registration not found.", "error")
+            return redirect(url_for("dashboard"))
+        target = target_rows[0]
+        if not _is_system_super_admin(actor):
+            if actor.get("role") != "super_admin":
+                abort(403)
+            if target.get("role") != "employee" or target.get("college_code") != _actor_college(actor):
+                abort(403)
         try:
-
-            db.auth.admin.delete_user(
-                user_id
-            )
-
-        except Exception as e:
-
-            print(
-                "AUTH DELETE ERROR:",
-                repr(e)
-            )
-
-
-        # -------------------------------------------------
-        # DELETE PROFILE
-        # -------------------------------------------------
-
-        try:
-
-            (
-                db.table("profiles")
-
-                .delete()
-
-                .eq(
-                    "id",
-                    user_id
-                )
-
-                .execute()
-            )
-
-
-        except Exception as e:
-
-            print(
-                "PROFILE DELETE ERROR:",
-                repr(e)
-            )
-
-
-        flash(
-            "Registration rejected.",
-            "success"
-        )
-
-
-    except Exception as e:
-
-        print(
-            "REJECT USER ERROR:",
-            repr(e)
-        )
-
-        flash(
-            f"Could not reject registration: {str(e)}",
-            "error"
-        )
-
-
-    return redirect(
-        url_for("dashboard")
-    )
+            db.auth.admin.delete_user(user_id)
+        except Exception:
+            app.logger.exception("AUTH DELETE ERROR")
+        db.table("profiles").delete().eq("id", user_id).execute()
+        flash("Registration rejected.", "success")
+    except Exception as exc:
+        app.logger.exception("REJECT USER ERROR")
+        flash(f"Could not reject registration: {exc}", "error")
+    return redirect(url_for("dashboard"))
 
 
 # =========================================================
@@ -1739,161 +1190,59 @@ def reject_user(user_id):
     methods=["GET", "POST"]
 )
 @login_required
-@role_required(
-    "super_admin",
-    "hr"
-)
+@role_required("super_admin", "hr")
 def employees():
-
     db = admin_client()
-
-
-    # =====================================================
-    # MANUAL EMPLOYEE ADD
-    # =====================================================
+    actor = _approved_actor_profile(db)
+    system_admin = _is_system_super_admin(actor)
+    if actor.get("role") not in ("super_admin", "hr"):
+        abort(403)
+    actor_college = None if system_admin else _actor_college(actor)
 
     if request.method == "POST":
-
         try:
-
-            monthly_salary = request.form.get(
-                "monthly_salary",
-                ""
-            ).strip()
-
-            hourly_rate = request.form.get(
-                "hourly_rate",
-                ""
-            ).strip()
-
-
-            employee_type = request.form.get(
-                "employee_type",
-                ""
-            ).strip().lower()
-
-
+            college_code = actor_college or request.form.get("college_code", "").strip().upper() or None
+            if college_code and college_code not in COLLEGE_NAMES:
+                raise ValueError("Select a valid college.")
+            if not college_code:
+                raise ValueError("Select a college for this employee before saving the record.")
+            employee_type = request.form.get("employee_type", "").strip().lower()
+            if employee_type not in EMPLOYEE_TYPES:
+                raise ValueError("Select a valid employee type.")
             db.table("employees").insert({
-
-                "employee_no":
-                    request.form.get(
-                        "employee_no",
-                        ""
-                    ).strip(),
-
-                "full_name":
-                    request.form.get(
-                        "full_name",
-                        ""
-                    ).strip(),
-
-                "employee_type":
-                    employee_type,
-
-                "department":
-                    request.form.get(
-                        "department",
-                        ""
-                    ).strip(),
-
-                "monthly_salary":
-                    float(
-                        monthly_salary
-                    )
-                    if monthly_salary
-                    else 0,
-
-                "hourly_rate":
-                    float(
-                        hourly_rate
-                    )
-                    if hourly_rate
-                    else 0,
-
-                "standard_hours":
-                    float(
-                        request.form.get(
-                            "standard_hours"
-                        )
-                        or 8
-                    ),
-
-                "workdays_per_month":
-                    int(
-                        request.form.get(
-                            "workdays_per_month"
-                        )
-                        or 22
-                    ),
-
-                "active":
-                    True
-
+                "employee_no": request.form.get("employee_no", "").strip(),
+                "full_name": request.form.get("full_name", "").strip(),
+                "employee_type": employee_type,
+                "college_code": college_code,
+                "department": request.form.get("department", "").strip(),
+                "monthly_salary": float(request.form.get("monthly_salary") or 0),
+                "hourly_rate": float(request.form.get("hourly_rate") or 0),
+                "standard_hours": float(request.form.get("standard_hours") or 8),
+                "workdays_per_month": int(request.form.get("workdays_per_month") or 22),
+                "active": True,
             }).execute()
-
-
-            flash(
-                "Employee record added.",
-                "success"
-            )
-
-
-            return redirect(
-                url_for("employees")
-            )
-
-
-        except Exception as e:
-
-            print(
-                "ADD EMPLOYEE ERROR:",
-                repr(e)
-            )
-
-            flash(
-                f"Could not add employee: {str(e)}",
-                "error"
-            )
-
-
-    # =====================================================
-    # LOAD EMPLOYEES
-    # =====================================================
+            flash("Employee record added.", "success")
+            return redirect(url_for("employees"))
+        except Exception as exc:
+            app.logger.exception("ADD EMPLOYEE ERROR")
+            flash(f"Could not add employee: {exc}", "error")
 
     try:
-
-        rows = (
-
-            db.table("employees")
-
-            .select("*")
-
-            .order(
-                "full_name"
-            )
-
-            .execute()
-
-            .data
-
-            or []
-
-        )
-
-
-    except Exception as e:
-
-        print(
-            "EMPLOYEE LIST ERROR:",
-            repr(e)
-        )
-
+        query = db.table("employees").select("*")
+        if actor_college:
+            query = query.eq("college_code", actor_college)
+        rows = query.order("full_name").execute().data or []
+    except Exception as exc:
+        app.logger.exception("EMPLOYEE LIST ERROR")
         rows = []
-
+        flash("Could not load employee records.", "error")
 
     return render_template(
         "employees.html",
-        employees=rows
+        employees=rows,
+        college_options=COLLEGE_OPTIONS,
+        is_system_admin=system_admin,
+        actor_college_code=actor_college,
     )
 
 
@@ -1906,26 +1255,55 @@ def employees():
 @login_required
 @role_required("super_admin")
 def dtr_upload():
-    """Create, append missing, or correct existing flagged DTR entries via CSV."""
+    """Upload DTR records into a single, college-scoped batch."""
     db = admin_client()
+    actor = _approved_actor_profile(db)
+    if actor.get("role") != "super_admin" or actor.get("admin_scope") not in ("system", "college"):
+        abort(403)
+    system_admin = _is_system_super_admin(actor)
+    actor_college = None if system_admin else _actor_college(actor)
 
     def list_batches():
         records = (db.table("dtr_entries")
-                   .select("import_batch,work_date")
+                   .select("import_batch,work_date,college_code")
                    .order("work_date", desc=True).execute().data or [])
         grouped = {}
         for record in records:
-            key, day = record.get("import_batch"), record.get("work_date")
+            key = record.get("import_batch")
+            day = record.get("work_date")
+            code = record.get("college_code")
             if not key:
                 continue
             if key not in grouped:
-                grouped[key] = {"id": key, "count": 0, "start": day, "end": day}
+                grouped[key] = {
+                    "id": key, "count": 0, "start": day, "end": day,
+                    "college_codes": set(), "has_unassigned": False,
+                }
             group = grouped[key]
             group["count"] += 1
+            if code:
+                group["college_codes"].add(code)
+            else:
+                group["has_unassigned"] = True
             if day:
                 group["start"] = min(group["start"] or day, day)
                 group["end"] = max(group["end"] or day, day)
-        return sorted(grouped.values(), key=lambda g: g["end"] or "", reverse=True)
+        result = []
+        for group in grouped.values():
+            codes = group.pop("college_codes")
+            has_unassigned = group.pop("has_unassigned")
+            if len(codes) == 1 and not has_unassigned:
+                code = next(iter(codes))
+            elif not codes and has_unassigned:
+                code = None
+            else:
+                code = "MIXED" if codes else None
+            group["college_code"] = code
+            group["college_name"] = COLLEGE_NAMES.get(code, "Mixed / unassigned")
+            # College admins only see batches wholly assigned to their college.
+            if system_admin or code == actor_college:
+                result.append(group)
+        return sorted(result, key=lambda item: item.get("end") or "", reverse=True)
 
     try:
         batches = list_batches()
@@ -1934,68 +1312,84 @@ def dtr_upload():
         flash("Could not load DTR batches. Please try again.", "error")
         return redirect(url_for("dashboard"))
 
+    template_context = {
+        "dtr_batches": batches,
+        "college_options": COLLEGE_OPTIONS,
+        "is_system_admin": system_admin,
+        "actor_college_code": actor_college,
+        "actor_college_name": COLLEGE_NAMES.get(actor_college, "All colleges"),
+    }
     if request.method == "GET":
-        return render_template("dtr_upload.html", dtr_batches=batches)
+        return render_template("dtr_upload.html", **template_context)
 
     upload = request.files.get("file")
     mode = request.form.get("upload_mode", "new")
     batch_id = request.form.get("batch_id", "").strip()
+    submitted_college = request.form.get("college_code", "").strip().upper()
+
     if not upload or not upload.filename:
         flash("Please select a CSV file.", "error")
         return redirect(url_for("dtr_upload"))
     if mode not in ("new", "append", "correct"):
         flash("Invalid upload mode.", "error")
         return redirect(url_for("dtr_upload"))
-    if mode in ("append", "correct") and batch_id not in {b["id"] for b in batches}:
-        flash("Select an existing DTR batch.", "error")
+    if mode in ("append", "correct") and batch_id not in {item["id"] for item in batches}:
+        flash("Select an existing DTR batch assigned to your college.", "error")
         return redirect(url_for("dtr_upload"))
 
     try:
+        if mode == "new":
+            college_code = submitted_college if system_admin else actor_college
+            if college_code not in COLLEGE_NAMES:
+                raise ValueError("Please select a valid college before uploading.")
+        else:
+            target_batch = next(item for item in batches if item["id"] == batch_id)
+            college_code = target_batch.get("college_code")
+            if college_code not in COLLEGE_NAMES:
+                raise ValueError("This older batch has no single college assignment. Assign its college before appending or correcting it.")
+            if not system_admin and college_code != actor_college:
+                abort(403)
+
         file_bytes = upload.read(2 * 1024 * 1024 + 1)
         if len(file_bytes) > 2 * 1024 * 1024:
             raise ValueError("CSV exceeds the 2 MB upload limit.")
         parsed = parse_csv(file_bytes)
         if not parsed:
             raise ValueError("The CSV contains no attendance rows.")
-        # Avoid duplicate employee/date entries in the same CSV.
-        keys = [(r["employee_no"], r["work_date"].isoformat()) for r in parsed]
+        keys = [(row["employee_no"], row["work_date"].isoformat()) for row in parsed]
         if len(keys) != len(set(keys)):
             raise ValueError("CSV contains duplicate employee/date rows. Remove duplicates before uploading.")
 
-        # BULK CORRECTION: only modify existing FLAGGED entries in the chosen batch.
-        # Validate the ENTIRE CSV before making any writes.
+        # Corrections remain within the selected batch and preserve its college.
         if mode == "correct":
-            verified = (db.table("profiles").select("id,role,approved")
-                        .eq("id", session.get("user_id"))
-                        .eq("role", "super_admin").eq("approved", True)
-                        .limit(1).execute().data or [])
-            if not verified:
-                abort(403)
             correction_reason = request.form.get("correction_reason", "").strip()
             if len(correction_reason) < 5 or len(correction_reason) > 500:
                 raise ValueError("Provide a correction reason between 5 and 500 characters.")
-            target = next(b for b in batches if b["id"] == batch_id)
-            # Existing batch scope is validated against every CSV employee+date.
-            # No new rows, no reassigning other batches, no edits to already-valid rows.
             existing_rows = (db.table("dtr_entries").select("*")
-                             .eq("import_batch", batch_id).execute().data or [])
-            existing_by_key = {}
-            for item in existing_rows:
-                existing_by_key[(str(item["employee_id"]), str(item["work_date"]))] = item
+                             .eq("import_batch", batch_id).eq("college_code", college_code)
+                             .execute().data or [])
+            existing_by_key = {
+                (str(item["employee_id"]), str(item["work_date"])): item
+                for item in existing_rows
+            }
             pending = []
             for row in parsed:
-                emp_res = (db.table("employees").select("id,standard_hours")
+                emp_res = (db.table("employees").select("id,standard_hours,college_code")
                            .eq("employee_no", row["employee_no"])
                            .limit(1).execute().data or [])
                 if not emp_res:
                     raise ValueError(f"CSV row {row['row_number']}: employee {row['employee_no']} not found.")
                 employee = emp_res[0]
+                if employee.get("college_code") != college_code:
+                    raise ValueError(f"CSV row {row['row_number']}: employee {row['employee_no']} is not assigned to {college_code}.")
                 key = (str(employee["id"]), row["work_date"].isoformat())
                 old = existing_by_key.get(key)
                 if not old:
                     raise ValueError(f"CSV row {row['row_number']}: employee/date is not present in the selected batch.")
+                if old.get("college_code") != college_code:
+                    raise ValueError(f"CSV row {row['row_number']}: DTR college assignment does not match the selected batch.")
                 if not old.get("requires_review"):
-                    raise ValueError(f"CSV row {row['row_number']}: this DTR is not flagged. Use individual administrative review for changes to valid entries.")
+                    raise ValueError(f"CSV row {row['row_number']}: this DTR is not flagged.")
                 check = evaluate_day(row["work_date"], row["time_in"], row["time_out"],
                                      standard_hours=employee.get("standard_hours") or 8)
                 if check.get("requires_review") or check.get("status") != "VALID":
@@ -2007,57 +1401,52 @@ def dtr_upload():
                     "payable_hours": float(check["payable_hours"]),
                     "requires_review": False,
                     "reason": check["reason"],
-                    "reviewed_by": verified[0]["id"],
+                    "reviewed_by": actor["id"],
                     "reviewed_at": datetime.now(timezone.utc).isoformat(),
                 }
                 pending.append((old, new))
             if not pending:
                 raise ValueError("No corrections were found in this CSV.")
-            # Fail closed on approved or released dates (including earlier completed payroll).
             dates = [str(old["work_date"]) for old, new in pending]
             protected = (db.table("payroll_runs").select("id")
                          .in_("status", ["approved", "released"])
+                         .eq("college_code", college_code)
                          .lte("start_date", max(dates)).gte("end_date", min(dates))
                          .limit(1).execute().data or [])
             if protected:
-                raise ValueError("Correction blocked: these dates overlap an approved or released payroll. Use the formal adjustment process.")
-            # Prevent updates after payroll has been generated for the selected period,
-            # including a draft; otherwise generated payroll is now stale.
+                raise ValueError("Correction blocked: these dates overlap an approved or released payroll.")
             drafts = (db.table("payroll_runs").select("id")
-                      .eq("status", "draft")
+                      .eq("status", "draft").eq("college_code", college_code)
                       .lte("start_date", max(dates)).gte("end_date", min(dates))
                       .limit(1).execute().data or [])
             if drafts:
-                raise ValueError("Correction blocked: an existing draft payroll overlaps the correction dates. Review and resolve the draft first.")
+                raise ValueError("Correction blocked: an existing draft payroll overlaps the correction dates.")
             corrected = 0
             for old, new in pending:
                 fields = ("time_in", "time_out", "status", "payable_hours", "requires_review", "reason")
-                before = {k: old.get(k) for k in fields}
-                after = {k: new.get(k) for k in fields}
-                audit = (db.table("dtr_correction_audit").insert({
+                audit = db.table("dtr_correction_audit").insert({
                     "dtr_entry_id": old["id"],
                     "employee_id": old["employee_id"],
                     "work_date": old["work_date"],
                     "import_batch": batch_id,
-                    "before_values": before,
-                    "after_values": after,
+                    "before_values": {key: old.get(key) for key in fields},
+                    "after_values": {key: new.get(key) for key in fields},
                     "correction_reason": correction_reason,
-                    "corrected_by": verified[0]["id"],
-                }).execute())
+                    "corrected_by": actor["id"],
+                }).execute()
                 if not audit.data:
                     raise RuntimeError("Audit write failed before correction; no update made for this row.")
-                # Conditional update prevents overwriting already-reviewed records.
                 result = (db.table("dtr_entries").update(new)
                           .eq("id", old["id"]).eq("import_batch", batch_id)
+                          .eq("college_code", college_code)
                           .eq("requires_review", True).execute())
                 if not result.data:
-                    raise RuntimeError("An attendance entry changed during this request. Review the audit history and records before retrying.")
+                    raise RuntimeError("An attendance entry changed during this request. Review the audit history before retrying.")
                 corrected += 1
-            flash(f"Corrected {corrected} flagged DTR records in the existing batch. Correction history saved.", "success")
+            flash(f"Corrected {corrected} flagged DTR records in {college_code}. Audit history saved.", "success")
             return redirect(url_for("dtr_review", batch_id=batch_id))
 
-        # Preload employee UUIDs. A missing employee is skipped, as in the old importer.
-        employee_numbers = sorted({r["employee_no"] for r in parsed if r["employee_no"]})
+        employee_numbers = sorted({row["employee_no"] for row in parsed if row["employee_no"]})
         employee_map = {}
         for number in employee_numbers:
             result = (db.table("employees").select("*")
@@ -2065,28 +1454,24 @@ def dtr_upload():
             if result.data:
                 employee_map[number] = result.data[0]
 
-        # Disallow append to any batch whose date range overlaps approved payroll.
-        # Conservative, because historical payroll_runs has no direct batch_id column.
         if mode == "append":
-            target = next(b for b in batches if b["id"] == batch_id)
-            existing_days = (db.table("dtr_entries")
-                             .select("employee_id,work_date")
-                             .eq("import_batch", batch_id).execute().data or [])
-            old_dates = [r["work_date"] for r in existing_days if r.get("work_date")]
-            incoming_dates = [r["work_date"].isoformat() for r in parsed]
-            low = min(old_dates + incoming_dates)
-            high = max(old_dates + incoming_dates)
+            existing_days = (db.table("dtr_entries").select("employee_id,work_date,college_code")
+                             .eq("import_batch", batch_id).eq("college_code", college_code)
+                             .execute().data or [])
+            old_dates = [row["work_date"] for row in existing_days if row.get("work_date")]
+            incoming_dates = [row["work_date"].isoformat() for row in parsed]
+            if not old_dates:
+                raise ValueError("The selected batch has no attendance rows for this college.")
+            low, high = min(old_dates + incoming_dates), max(old_dates + incoming_dates)
             approved = (db.table("payroll_runs").select("id")
-                        .eq("status", "approved")
+                        .eq("status", "approved").eq("college_code", college_code)
                         .lte("start_date", high).gte("end_date", low)
                         .limit(1).execute().data or [])
             if approved:
-                raise ValueError("This batch overlaps an approved payroll period. Append is blocked to protect finalized records.")
+                raise ValueError("This batch overlaps an approved payroll period. Append is blocked.")
         else:
             batch_id = str(uuid.uuid4())
 
-        # Preflight: duplicates are SKIPPED, never silently overwritten or reassigned.
-        # Any existing employee/date row, in any batch, stays untouched.
         prepared = []
         skipped_missing = 0
         skipped_existing = 0
@@ -2095,6 +1480,11 @@ def dtr_upload():
             if not employee:
                 skipped_missing += 1
                 continue
+            if employee.get("college_code") != college_code:
+                raise ValueError(
+                    f"CSV row {row['row_number']}: employee {row['employee_no']} is assigned to "
+                    f"{employee.get('college_code') or 'no college'}, not {college_code}."
+                )
             day = row["work_date"].isoformat()
             prior = (db.table("dtr_entries").select("id")
                      .eq("employee_id", employee["id"])
@@ -2105,7 +1495,8 @@ def dtr_upload():
             check = evaluate_day(row["work_date"], row["time_in"], row["time_out"],
                                  standard_hours=employee.get("standard_hours") or 8)
             prepared.append({
-                "employee_id": employee["id"], "work_date": day,
+                "employee_id": employee["id"],
+                "work_date": day,
                 "time_in": row["time_in"].isoformat() if row["time_in"] else None,
                 "time_out": row["time_out"].isoformat() if row["time_out"] else None,
                 "status": check.get("status"),
@@ -2113,19 +1504,21 @@ def dtr_upload():
                 "reason": check.get("reason"),
                 "requires_review": check.get("requires_review", False),
                 "import_batch": batch_id,
-                "source_row_number": row["row_number"]
+                "college_code": college_code,
+                "source_row_number": row["row_number"],
             })
 
         if not prepared:
-            flash(f"No new records: {skipped_existing} already exist; {skipped_missing} unmatched employees.", "warning")
+            flash(f"No new records: {skipped_existing} duplicates skipped; {skipped_missing} unmatched employees.", "warning")
             return redirect(url_for("dtr_upload"))
 
-        # The DB unique constraint employee_id,work_date protects against races.
-        # No upsert: collisions are reported rather than overwriting existing records.
         for item in prepared:
             db.table("dtr_entries").insert(item).execute()
-        flash(f"DTR saved: {len(prepared)} new; {skipped_existing} duplicate dates skipped; "
-              f"{skipped_missing} unmatched employees. Batch: {batch_id}", "success")
+        flash(
+            f"DTR saved for {COLLEGE_NAMES[college_code]}: {len(prepared)} new; "
+            f"{skipped_existing} duplicates skipped; {skipped_missing} unmatched employees. Batch: {batch_id}",
+            "success",
+        )
         return redirect(url_for("dashboard"))
     except ValueError as exc:
         flash(str(exc), "error")
@@ -2133,7 +1526,6 @@ def dtr_upload():
         app.logger.exception("DTR IMPORT / APPEND ERROR")
         flash("DTR import failed. Some records may already have been saved; review the batch before retrying.", "error")
     return redirect(url_for("dtr_upload"))
-
 
 
 # =========================================================
@@ -2145,18 +1537,31 @@ def dtr_upload():
 @role_required("super_admin")
 def dtr_review(batch_id):
     db = admin_client()
+    actor = _approved_actor_profile(db)
+    if actor.get("role") != "super_admin":
+        abort(403)
     try:
         rows = (db.table("dtr_entries")
-                .select("id,employee_id,work_date,time_in,time_out,status,reason,requires_review,payable_hours,import_batch,source_row_number,employees(employee_no,full_name)")
+                .select("id,employee_id,work_date,time_in,time_out,status,reason,requires_review,payable_hours,import_batch,college_code,source_row_number,employees(employee_no,full_name)")
                 .eq("import_batch", batch_id)
-                .order("work_date")
-                .execute().data or [])
+                .order("work_date").execute().data or [])
         if not rows:
             flash("DTR batch not found.", "error")
             return redirect(url_for("dtr_upload"))
+        codes = {row.get("college_code") for row in rows}
+        if not _is_system_super_admin(actor):
+            if codes != {_actor_college(actor)}:
+                abort(403)
+        elif len(codes) != 1 or None in codes:
+            flash("This batch has mixed or unassigned college rows. Resolve its college assignments before reviewing.", "error")
+            return redirect(url_for("dtr_upload"))
         flagged = [row for row in rows if row.get("requires_review")]
-        return render_template("dtr_review.html", batch_id=batch_id, records=rows,
-                               flagged=flagged, total=len(rows))
+        code = rows[0].get("college_code")
+        return render_template(
+            "dtr_review.html", batch_id=batch_id, records=rows,
+            flagged=flagged, total=len(rows),
+            college_name=COLLEGE_NAMES.get(code, "Unassigned"),
+        )
     except Exception:
         app.logger.exception("DTR REVIEW ERROR")
         flash("Could not load DTR review.", "error")
@@ -2177,125 +1582,33 @@ def dtr_review(batch_id):
 @login_required
 @role_required("hr")
 def select_dtr_batch(batch_id):
-
     try:
-
         db = admin_client()
-
-
-        # -------------------------------------------------
-        # VERIFY BATCH EXISTS
-        # -------------------------------------------------
-
-        result = (
-
-            db.table(
-                "dtr_entries"
-            )
-
-            .select(
-                "import_batch,"
-                "work_date"
-            )
-
-            .eq(
-                "import_batch",
-                batch_id
-            )
-
-            .execute()
-
-        )
-
-
-        rows = (
-            result.data
-            or []
-        )
-
-
+        actor = _approved_actor_profile(db)
+        if actor.get("role") != "hr" or actor.get("admin_scope") != "college":
+            abort(403)
+        college_code = _actor_college(actor)
+        rows = (db.table("dtr_entries").select("import_batch,work_date,college_code")
+                .eq("import_batch", batch_id)
+                .execute().data or [])
         if not rows:
-
-            flash(
-                "The selected Master DTR batch was not found.",
-                "error"
-            )
-
-            return redirect(
-                url_for("dashboard")
-            )
-
-
-        # -------------------------------------------------
-        # GET BATCH DATE RANGE
-        # -------------------------------------------------
-
-        work_dates = [
-
-            row.get(
-                "work_date"
-            )
-
-            for row in rows
-
-            if row.get(
-                "work_date"
-            )
-
-        ]
-
-
-        work_dates.sort()
-
-
-        # -------------------------------------------------
-        # SAVE SELECTION TO SESSION
-        # -------------------------------------------------
-
-        session[
-            "selected_dtr_batch"
-        ] = batch_id
-
-
+            flash("The selected Master DTR batch was not found.", "error")
+            return redirect(url_for("dashboard"))
+        codes = {row.get("college_code") for row in rows}
+        if codes != {college_code}:
+            abort(403, description="The selected DTR batch is not exclusively assigned to your college.")
+        work_dates = sorted(row["work_date"] for row in rows if row.get("work_date"))
+        session["selected_dtr_batch"] = batch_id
+        session["selected_dtr_college_code"] = college_code
         if work_dates:
-
-            session[
-                "selected_dtr_start_date"
-            ] = work_dates[0]
-
-            session[
-                "selected_dtr_end_date"
-            ] = work_dates[-1]
-
-
-        flash(
-            "Master DTR selected successfully. "
-            "You can now generate payroll.",
-            "success"
-        )
-
-
-        return redirect(
-            url_for("dashboard")
-        )
-
-
-    except Exception as e:
-
-        print(
-            "SELECT DTR BATCH ERROR:",
-            repr(e)
-        )
-
-        flash(
-            f"Could not select Master DTR: {str(e)}",
-            "error"
-        )
-
-
-        return redirect(
-            url_for("dashboard")
-        )
+            session["selected_dtr_start_date"] = work_dates[0]
+            session["selected_dtr_end_date"] = work_dates[-1]
+        flash(f"Master DTR for {college_code} selected. You can now generate payroll.", "success")
+        return redirect(url_for("dashboard"))
+    except Exception as exc:
+        app.logger.exception("SELECT DTR BATCH ERROR")
+        flash(f"Could not select Master DTR: {exc}", "error")
+        return redirect(url_for("dashboard"))
 
 
 # =========================================================
@@ -2347,6 +1660,15 @@ def payroll():
 
 
     db = admin_client()
+    actor = _approved_actor_profile(db)
+    system_admin = _is_system_super_admin(actor)
+    if actor.get("role") not in ("super_admin", "hr"):
+        abort(403)
+    if actor.get("role") == "hr" and actor.get("admin_scope") != "college":
+        abort(403)
+    if actor.get("role") == "super_admin" and actor.get("admin_scope") not in ("system", "college"):
+        abort(403)
+    college_scope = None if system_admin else _actor_college(actor)
 
 
     # =====================================================
@@ -2457,7 +1779,7 @@ def payroll():
                     "dtr_entries"
                 )
 
-                .select("id")
+                .select("id,college_code")
 
                 .eq(
                     "import_batch",
@@ -2487,6 +1809,7 @@ def payroll():
                     "selected_dtr_end_date",
                     None
                 )
+                session.pop("selected_dtr_college_code", None)
 
 
                 flash(
@@ -2507,10 +1830,16 @@ def payroll():
             if _date.fromisoformat(start_date) > _date.fromisoformat(end_date):
                 raise ValueError("Payroll start date must be on or before end date.")
             selected_rows = (db.table("dtr_entries")
-                             .select("employee_id,work_date,requires_review")
+                             .select("employee_id,work_date,requires_review,college_code")
                              .eq("import_batch", selected_dtr_batch).execute().data or [])
             if not selected_rows:
                 raise ValueError("Selected DTR batch is empty.")
+            batch_colleges = {row.get("college_code") for row in selected_rows}
+            if len(batch_colleges) != 1 or None in batch_colleges:
+                raise ValueError("The selected DTR batch must belong to exactly one assigned college.")
+            payroll_college_code = next(iter(batch_colleges))
+            if actor.get("role") != "hr" or payroll_college_code != college_scope:
+                raise ValueError("The selected DTR batch does not belong to your assigned college.")
             all_days = [row["work_date"] for row in selected_rows]
             if min(all_days) != start_date or max(all_days) != end_date:
                 raise ValueError("Payroll dates must match the selected DTR batch date range: "
@@ -2519,19 +1848,38 @@ def payroll():
                 raise ValueError("Selected DTR batch contains unresolved flagged attendance. Ask Super Admin to correct it first.")
             prior_runs = (db.table("payroll_runs").select("id,status")
                           .eq("start_date", start_date).eq("end_date", end_date)
-                          .eq("cutoff_no", cutoff_no).execute().data or [])
+                          .eq("cutoff_no", cutoff_no)
+                          .eq("college_code", payroll_college_code)
+                          .execute().data or [])
             if prior_runs:
                 raise ValueError("A payroll run for this exact period and cutoff already exists. Review it rather than generating a duplicate.")
             # Load all active employee fields once so the payroll calculator can
             # use the HR-verified tax profile. Never infer tax treatment from
             # employee_type (e.g. COS/EBJO/casual).
+            unassigned_active = (
+                db.table("employees").select("id")
+                .eq("active", True)
+                .is_("college_code", "null")
+                .limit(1).execute().data or []
+            )
+            if unassigned_active:
+                raise ValueError(
+                    "At least one active employee has no college assignment. "
+                    "Assign every active employee to a college before generating payroll."
+                )
+
             active_employees = (
                 db.table("employees")
                 .select("*")
                 .eq("active", True)
+                .eq("college_code", payroll_college_code)
                 .execute()
                 .data or []
             )
+            if not active_employees:
+                raise ValueError(
+                    f"No active employees are assigned to {payroll_college_code}."
+                )
 
             allowed_tax_treatments = {
                 "COMPENSATION", "PROFESSIONAL_EWT", "MANUAL", "EXEMPT"
@@ -2598,6 +1946,9 @@ def payroll():
                     "status":
                         "draft",
 
+                    "college_code":
+                        payroll_college_code,
+
                     "created_by":
                         session.get(
                             "user_id"
@@ -2660,6 +2011,10 @@ def payroll():
                     .eq(
                         "import_batch",
                         selected_dtr_batch
+                    )
+                    .eq(
+                        "college_code",
+                        payroll_college_code
                     )
 
                     .gte(
@@ -2905,13 +2260,11 @@ def payroll():
 
     try:
 
+        runs_query = db.table("payroll_runs").select("*")
+        if college_scope:
+            runs_query = runs_query.eq("college_code", college_scope)
         runs = (
-
-            db.table(
-                "payroll_runs"
-            )
-
-            .select("*")
+            runs_query
 
             .order(
                 "created_at",
@@ -2980,6 +2333,11 @@ def payroll_detail(run_id):
     try:
 
         db = admin_client()
+        actor = _approved_actor_profile(db)
+        if actor.get("role") not in ("super_admin", "hr"):
+            abort(403)
+        if actor.get("role") == "hr" and actor.get("admin_scope") != "college":
+            abort(403)
 
 
         run_result = (
@@ -3013,6 +2371,9 @@ def payroll_detail(run_id):
                 url_for("payroll")
             )
 
+        if not _is_system_super_admin(actor):
+            if run_result.data[0].get("college_code") != _actor_college(actor):
+                abort(403)
 
         items = (
 
@@ -3086,6 +2447,7 @@ def approve_payroll(run_id):
     try:
 
         db = admin_client()
+        _require_system_super_admin(db)
 
 
         result = (
@@ -3201,8 +2563,13 @@ def complaints():
         return redirect(url_for("login"))
 
     db = admin_client()
+    profile = _approved_actor_profile(db)
     profile_id = str(profile["id"])
     role = profile.get("role", "employee")
+    system_admin = _is_system_super_admin(profile)
+    college_scope = None
+    if role in ("super_admin", "hr") and not system_admin:
+        college_scope = _actor_college(profile)
 
     if request.method == "POST":
         complaint_text = request.form.get("complaint", "").strip()
@@ -3256,9 +2623,17 @@ def complaints():
 
     try:
         query = db.table("complaints").select("*")
-        if role not in ("super_admin", "hr"):
-            # The database has submitted_by, not user_id.
+        if role == "employee":
             query = query.eq("submitted_by", profile_id)
+        elif college_scope:
+            college_employee_ids = (db.table("employees").select("id")
+                                    .eq("college_code", college_scope)
+                                    .execute().data or [])
+            ids = [item["id"] for item in college_employee_ids]
+            if ids:
+                query = query.in_("employee_id", ids)
+            else:
+                query = query.eq("employee_id", "00000000-0000-0000-0000-000000000000")
         rows = (
             query.order("created_at", desc=True)
             .execute().data or []
@@ -3331,6 +2706,11 @@ def download_payroll_payslips(run_id):
     does not recalculate gross pay, deductions, or BIR withholding tax.
     """
     db = admin_client()
+    actor = _approved_actor_profile(db)
+    if actor.get("role") not in ("super_admin", "hr"):
+        abort(403)
+    if actor.get("role") == "hr" and actor.get("admin_scope") != "college":
+        abort(403)
 
     runs = (
         db.table("payroll_runs")
@@ -3343,6 +2723,9 @@ def download_payroll_payslips(run_id):
     )
     if not runs:
         abort(404, description="Approved payroll run not found.")
+    if not _is_system_super_admin(actor):
+        if runs[0].get("college_code") != _actor_college(actor):
+            abort(403)
 
     items = (
         db.table("payroll_items")
