@@ -1,8 +1,47 @@
+
 {% extends 'base.html' %}
 
 {% block title %}Login - BulSU Payroll{% endblock %}
 
 {% block content %}
+
+<style>
+    .password-field-wrap {
+        position: relative;
+        width: 100%;
+    }
+
+    .password-field-wrap input {
+        width: 100%;
+        box-sizing: border-box;
+        padding-right: 75px;
+    }
+
+    .password-toggle {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        border: none;
+        background: transparent;
+        color: #3448a5;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        padding: 6px;
+        z-index: 2;
+    }
+
+    .password-toggle:hover {
+        text-decoration: underline;
+    }
+
+    .password-toggle:focus-visible {
+        outline: 2px solid #3448a5;
+        outline-offset: 2px;
+        border-radius: 4px;
+    }
+</style>
 
 <div class="auth-card">
 
@@ -21,24 +60,42 @@
     <!-- Login Form -->
     <form method="POST">
 
-        <label class="field-label">Email</label>
+        <label class="field-label" for="email">Email</label>
 
         <input
             type="email"
+            id="email"
             name="email"
             required
             autocomplete="email"
         >
 
 
-        <label class="field-label">Password</label>
+        <label class="field-label" for="passwordInput">Password</label>
 
-        <input
-            type="password"
-            name="password"
-            required
-            autocomplete="current-password"
-        >
+        <!-- Password Input with Show/Hide -->
+        <div class="password-field-wrap">
+
+            <input
+                type="password"
+                id="passwordInput"
+                name="password"
+                required
+                autocomplete="current-password"
+            >
+
+            <button
+                type="button"
+                id="togglePassword"
+                class="password-toggle"
+                aria-label="Show password"
+                aria-controls="passwordInput"
+                aria-pressed="false"
+            >
+                Show
+            </button>
+
+        </div>
 
 
         <button
@@ -67,6 +124,42 @@
     </p>
 
 </div>
+
+
+<!-- ========================================= -->
+<!-- SHOW / HIDE PASSWORD -->
+<!-- ========================================= -->
+
+<script>
+(function () {
+
+    const passwordInput = document.getElementById("passwordInput");
+    const togglePassword = document.getElementById("togglePassword");
+
+    if (!passwordInput || !togglePassword) return;
+
+    togglePassword.addEventListener("click", function () {
+
+        const isHidden = passwordInput.type === "password";
+
+        passwordInput.type = isHidden ? "text" : "password";
+
+        togglePassword.textContent = isHidden ? "Hide" : "Show";
+
+        togglePassword.setAttribute(
+            "aria-label",
+            isHidden ? "Hide password" : "Show password"
+        );
+
+        togglePassword.setAttribute(
+            "aria-pressed",
+            String(isHidden)
+        );
+
+    });
+
+})();
+</script>
 
 
 <!-- ========================================= -->
