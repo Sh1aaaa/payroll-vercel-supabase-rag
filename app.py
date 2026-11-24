@@ -5,6 +5,7 @@ import secrets
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 from datetime import datetime, timezone
 
 from flask import (
@@ -2521,12 +2522,57 @@ def payroll():
                           .eq("cutoff_no", cutoff_no).execute().data or [])
             if prior_runs:
                 raise ValueError("A payroll run for this exact period and cutoff already exists. Review it rather than generating a duplicate.")
-            active_employees = (db.table("employees").select("id")
-                                .eq("active", True).execute().data or [])
+            # Load all active employee fields once so the payroll calculator can
+            # use the HR-verified tax profile. Never infer tax treatment from
+            # employee_type (e.g. COS/EBJO/casual).
+            active_employees = (
+                db.table("employees")
+                .select("*")
+                .eq("active", True)
+                .execute()
+                .data or []
+            )
+
+            allowed_tax_treatments = {
+                "COMPENSATION", "PROFESSIONAL_EWT", "MANUAL", "EXEMPT"
+            }
+            for active_employee in active_employees:
+                treatment = str(
+                    active_employee.get("tax_treatment") or "REVIEW_REQUIRED"
+                ).strip().upper()
+                employee_label = (
+                    active_employee.get("employee_no")
+                    or active_employee.get("id")
+                    or "unknown employee"
+                )
+
+                if treatment == "REVIEW_REQUIRED":
+                    raise ValueError(
+                        f"Tax treatment is not configured for employee {employee_label}. "
+                        "Ask HR to update the employee tax profile before generating payroll."
+                    )
+
+                if treatment not in allowed_tax_treatments:
+                    raise ValueError(
+                        f"Employee {employee_label} has an unsupported tax treatment: {treatment}."
+                    )
+
+                if treatment == "EXEMPT" and not str(
+                    active_employee.get("tax_exemption_basis") or ""
+                ).strip():
+                    raise ValueError(
+                        f"Employee {employee_label} is marked EXEMPT but has no documented tax_exemption_basis."
+                    )
+
             covered_ids = {row["employee_id"] for row in selected_rows}
-            missing_ids = [row["id"] for row in active_employees if row["id"] not in covered_ids]
+            missing_ids = [
+                row["id"] for row in active_employees
+                if row["id"] not in covered_ids
+            ]
             if missing_ids:
-                raise ValueError(f"DTR batch is missing attendance for {len(missing_ids)} active employees. Complete the batch first.")
+                raise ValueError(
+                    f"DTR batch is missing attendance for {len(missing_ids)} active employees. Complete the batch first."
+                )
 
             # -------------------------------------------------
             # CREATE PAYROLL RUN
@@ -2582,26 +2628,8 @@ def payroll():
             # GET ACTIVE EMPLOYEES
             # -------------------------------------------------
 
-            employee_rows = (
-
-                db.table(
-                    "employees"
-                )
-
-                .select("*")
-
-                .eq(
-                    "active",
-                    True
-                )
-
-                .execute()
-
-                .data
-
-                or []
-
-            )
+            # Reuse the same verified active employee set from preflight.
+            employee_rows = active_employees
 
 
             # -------------------------------------------------
@@ -2744,6 +2772,14 @@ def payroll():
                                 "net_pay",
                                 0
                             ),
+
+                        # Immutable tax snapshot from payroll calculation.
+                        # Payslip generation reads these saved values and never recalculates tax.
+                        "tax_treatment": calculation.get("tax_treatment"),
+                        "taxable_compensation": calculation.get("taxable_compensation"),
+                        "withholding_tax": calculation.get("withholding_tax", 0),
+                        "tax_period_type": calculation.get("tax_period_type"),
+                        "tax_details": calculation.get("tax_details", {}),
 
                         "attendance_summary": {
                             "dtr_batch":
@@ -3277,6 +3313,103 @@ def download_payslip(item_id):
                          download_name=f"payslip-{item['id']}.pdf")
     response.headers['Cache-Control'] = 'private, no-store, max-age=0'
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+
+# =========================================================
+# STAFF DOWNLOAD: ALL PAYSLIPS FOR AN APPROVED PAYROLL RUN
+# =========================================================
+
+@app.route("/payroll/<run_id>/payslips.zip")
+@login_required
+@role_required("super_admin", "hr")
+def download_payroll_payslips(run_id):
+    """Build individual PDF payslips from saved approved payroll values.
+
+    Payroll must first be reviewed and approved by Super Admin. This route
+    does not recalculate gross pay, deductions, or BIR withholding tax.
+    """
+    db = admin_client()
+
+    runs = (
+        db.table("payroll_runs")
+        .select("*")
+        .eq("id", run_id)
+        .eq("status", "approved")
+        .limit(1)
+        .execute()
+        .data or []
+    )
+    if not runs:
+        abort(404, description="Approved payroll run not found.")
+
+    items = (
+        db.table("payroll_items")
+        .select("*,employees(*)")
+        .eq("payroll_run_id", run_id)
+        .execute()
+        .data or []
+    )
+    if not items:
+        abort(404, description="No payroll items found for this run.")
+
+    archive_buffer = BytesIO()
+    added = 0
+    seen_names = set()
+
+    try:
+        with ZipFile(archive_buffer, "w", compression=ZIP_DEFLATED) as archive:
+            for item in items:
+                employee = item.get("employees")
+                if isinstance(employee, list):
+                    employee = employee[0] if employee else None
+                if not employee:
+                    raise ValueError(
+                        f"Employee details are missing for payroll item {item.get('id')}."
+                    )
+
+                deductions = (
+                    db.table("payroll_item_deductions")
+                    .select("name,amount")
+                    .eq("payroll_item_id", item["id"])
+                    .execute()
+                    .data or []
+                )
+
+                pdf_bytes = generate_payslip_pdf(
+                    employee, item, runs[0], deductions
+                )
+
+                raw_employee_no = str(
+                    employee.get("employee_no") or item.get("id") or "employee"
+                )
+                safe_employee_no = "".join(
+                    ch for ch in raw_employee_no
+                    if ch.isalnum() or ch in ("-", "_")
+                ) or str(item.get("id"))
+                filename = f"payslip-{safe_employee_no}.pdf"
+                if filename in seen_names:
+                    filename = f"payslip-{safe_employee_no}-{item.get('id')}.pdf"
+                seen_names.add(filename)
+                archive.writestr(filename, pdf_bytes)
+                added += 1
+    except ValueError as exc:
+        app.logger.exception("BULK PAYSLIP VALIDATION ERROR")
+        abort(409, description=f"Cannot create payslip archive: {exc}")
+
+    if not added:
+        abort(409, description="No valid payslips could be generated for this payroll run.")
+
+    archive_buffer.seek(0)
+    response = send_file(
+        archive_buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"payroll-{run_id}-payslips.zip",
+    )
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 
