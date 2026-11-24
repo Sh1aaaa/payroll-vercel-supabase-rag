@@ -1,3 +1,4 @@
+
 {% extends 'base.html' %}
 
 {% block title %}Register - BulSU Payroll{% endblock %}
@@ -5,27 +6,44 @@
 {% block content %}
 
 <div class="auth-card">
+
     <div class="auth-icon">⚖️</div>
+
     <h1>Employee Registration</h1>
+
     <p class="auth-muted">
-        Your account must be approved by your College Super Admin or the System Super Admin before login.
+        Your account must be approved by your College Super Admin
+        or the System Super Admin before login.
     </p>
 
     <form method="POST">
+
         <label class="field-label">Full Name</label>
-        <input type="text" name="full_name"
-               value="{{ request.form.get('full_name', '') }}"
-               placeholder="Enter your full name" required>
+        <input
+            type="text"
+            name="full_name"
+            value="{{ request.form.get('full_name', '') }}"
+            placeholder="Enter your full name"
+            required
+        >
 
         <label class="field-label">School / Employee ID</label>
-        <input type="text" name="employee_id"
-               value="{{ request.form.get('employee_id', '') }}"
-               placeholder="Enter your School / Employee ID" required>
-        <small class="auth-muted">Enter your official BulSU School / Employee ID.</small>
+        <input
+            type="text"
+            name="employee_id"
+            value="{{ request.form.get('employee_id', '') }}"
+            placeholder="Enter your School / Employee ID"
+            required
+        >
+
+        <small class="auth-muted">
+            Enter your official BulSU School / Employee ID.
+        </small>
 
         <label class="field-label">Employee Type</label>
         <select name="employee_type" required>
             <option value="">Select Employee Type</option>
+
             {% for value, label in [
                 ('regular', 'Regular'),
                 ('temporary', 'Temporary'),
@@ -35,40 +53,67 @@
                 ('cos', 'COS'),
                 ('part_time', 'Part-Time')
             ] %}
-                <option value="{{ value }}" {% if request.form.get('employee_type') == value %}selected{% endif %}>
+                <option
+                    value="{{ value }}"
+                    {% if request.form.get('employee_type') == value %}selected{% endif %}
+                >
                     {{ label }}
                 </option>
             {% endfor %}
         </select>
 
-        <label class="field-label" for="college_code">College / Department</label>
-        <select name="college_code" id="college_code" required>
+        <label class="field-label">College / Department</label>
+        <select name="college_code" required>
             <option value="">Select College</option>
+
             {% for college in college_options %}
-                <option value="{{ college.code }}"
-                    {% if request.form.get('college_code') == college.code %}selected{% endif %}>
+                <option
+                    value="{{ college.code }}"
+                    {% if request.form.get('college_code') == college.code %}selected{% endif %}
+                >
                     {{ college.code }} - {{ college.name }}
                 </option>
             {% endfor %}
         </select>
 
         <label class="field-label">Email</label>
-        <input type="email" name="email"
-               value="{{ request.form.get('email', '') }}"
-               placeholder="Enter your email" required>
+        <input
+            type="email"
+            name="email"
+            value="{{ request.form.get('email', '') }}"
+            placeholder="Enter your email"
+            required
+        >
 
         <label class="field-label">Password</label>
-        <input type="password" name="password" minlength="6" required>
+        <input
+            type="password"
+            name="password"
+            minlength="6"
+            required
+        >
 
         <label class="field-label">Confirm Password</label>
-        <input type="password" name="confirm_password" minlength="6" required>
+        <input
+            type="password"
+            name="confirm_password"
+            minlength="6"
+            required
+        >
 
-        <button class="btn btn-primary btn-block" type="submit">Register</button>
+        <button
+            class="btn btn-primary btn-block"
+            type="submit"
+        >
+            Register
+        </button>
+
     </form>
 
     <p class="auth-bottom">
         <a href="{{ url_for('login') }}">Back to Login</a>
     </p>
+
 </div>
 
 {% endblock %}
