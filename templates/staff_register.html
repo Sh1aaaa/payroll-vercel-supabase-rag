@@ -1,3 +1,4 @@
+
 {% extends 'base.html' %}
 
 {% block title %}Staff Registration - BulSU Payroll{% endblock %}
@@ -5,7 +6,9 @@
 {% block content %}
 
 <div class="auth-card">
+
     <div class="auth-icon">⚖️</div>
+
     <h1>Staff Registration</h1>
 
     {% if has_super_admin %}
@@ -16,76 +19,147 @@
     {% else %}
         <p class="auth-muted">
             This is the initial System Super Admin registration.
-            The first System Super Admin is automatically approved and has access to all colleges.
+            The first System Super Admin is automatically approved.
         </p>
     {% endif %}
 
     <form method="POST">
+
         <label class="field-label">Full Name</label>
-        <input type="text" name="full_name"
-               value="{{ request.form.get('full_name', '') }}"
-               placeholder="Enter your full name" required>
+        <input
+            type="text"
+            name="full_name"
+            value="{{ request.form.get('full_name', '') }}"
+            placeholder="Enter your full name"
+            required
+        >
 
         <label class="field-label">School / Employee ID</label>
-        <input type="text" name="employee_id"
-               value="{{ request.form.get('employee_id', '') }}"
-               placeholder="Enter your School / Employee ID"
-               {% if has_super_admin %}required{% endif %}>
-        <small class="auth-muted">Enter your official BulSU School / Employee ID.</small>
+        <input
+            type="text"
+            name="employee_id"
+            value="{{ request.form.get('employee_id', '') }}"
+            placeholder="Enter your School / Employee ID"
+            {% if has_super_admin %}required{% endif %}
+        >
+
+        <small class="auth-muted">
+            Enter your official BulSU School / Employee ID.
+        </small>
 
         <label class="field-label">Email</label>
-        <input type="email" name="email"
-               value="{{ request.form.get('email', '') }}"
-               placeholder="Enter your email" required>
+        <input
+            type="email"
+            name="email"
+            value="{{ request.form.get('email', '') }}"
+            placeholder="Enter your email"
+            required
+        >
 
         <label class="field-label">Password</label>
-        <input type="password" name="password" minlength="6" required>
+        <input
+            type="password"
+            name="password"
+            minlength="6"
+            required
+        >
 
         <label class="field-label">Confirm Password</label>
-        <input type="password" name="confirm_password" minlength="6" required>
+        <input
+            type="password"
+            name="confirm_password"
+            minlength="6"
+            required
+        >
 
         {% if has_super_admin %}
+
             <label class="field-label">Account Type</label>
-            <select name="role" required>
+
+            <select name="role" id="staff-role" required>
                 <option value="">Select Account Type</option>
-                <option value="hr" {% if request.form.get('role') == 'hr' %}selected{% endif %}>
+
+                <option
+                    value="hr"
+                    {% if request.form.get('role') == 'hr' %}selected{% endif %}
+                >
                     Payroll Clerk
                 </option>
-                <option value="super_admin" {% if request.form.get('role') == 'super_admin' %}selected{% endif %}>
+
+                <option
+                    value="super_admin"
+                    {% if request.form.get('role') == 'super_admin' %}selected{% endif %}
+                >
                     College Super Admin
                 </option>
             </select>
 
-            <label class="field-label" for="college_code">College / Department</label>
-            <select name="college_code" id="college_code" required>
-                <option value="">Select College</option>
-                {% for college in college_options %}
-                    <option value="{{ college.code }}"
-                        {% if request.form.get('college_code') == college.code %}selected{% endif %}>
-                        {{ college.code }} - {{ college.name }}
-                    </option>
-                {% endfor %}
-            </select>
-            <small class="auth-muted">This account will only manage the selected college. Final payroll approval remains with the System Super Admin.</small>
-        {% else %}
-            <input type="hidden" name="role" value="super_admin">
-            <div class="control-note">
-                <strong>System-wide access</strong>
-                <p class="auth-muted">The initial System Super Admin is not assigned to a single college.</p>
+            <div id="staff-college-field">
+                <label class="field-label">Assigned College</label>
+
+                <select name="college_code" id="staff-college">
+                    <option value="">Select College</option>
+
+                    {% for college in college_options %}
+                        <option
+                            value="{{ college.code }}"
+                            {% if request.form.get('college_code') == college.code %}selected{% endif %}
+                        >
+                            {{ college.code }} - {{ college.name }}
+                        </option>
+                    {% endfor %}
+                </select>
             </div>
+
+        {% else %}
+
+            <input
+                type="hidden"
+                name="role"
+                value="super_admin"
+            >
+
             <label class="field-label">Admin Setup Secret</label>
-            <input type="password" name="admin_setup_secret"
-                   placeholder="Enter setup secret" required>
+            <input
+                type="password"
+                name="admin_setup_secret"
+                placeholder="Enter setup secret"
+                required
+            >
+
         {% endif %}
 
-        <button class="btn btn-primary btn-block" type="submit">
+        <button
+            class="btn btn-primary btn-block"
+            type="submit"
+        >
             Register Staff Account
         </button>
+
     </form>
 
     <p class="auth-bottom">
         <a href="{{ url_for('login') }}">Back to Login</a>
     </p>
+
 </div>
+
+{% if has_super_admin %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const role = document.getElementById("staff-role");
+    const college = document.getElementById("staff-college");
+    const collegeField = document.getElementById("staff-college-field");
+
+    function updateCollegeField() {
+        collegeField.style.display = "block";
+        college.required = true;
+    }
+
+    role.addEventListener("change", updateCollegeField);
+    updateCollegeField();
+});
+</script>
+{% endif %}
 
 {% endblock %}
