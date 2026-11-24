@@ -1,48 +1,94 @@
 {% extends 'base.html' %}
+
 {% block title %}Payroll Review - BulSU Payroll{% endblock %}
+
 {% block content %}
 <div class="role-dashboard">
     <div class="dashboard-heading">
         <h1>Payroll Review</h1>
-        <p>{{ payroll_run.start_date }} — {{ payroll_run.end_date }} · Cutoff {{ payroll_run.cutoff_no }}</p>
+        <p>
+            {{ payroll_run.start_date }} — {{ payroll_run.end_date }}
+            · Cutoff {{ payroll_run.cutoff_no }}
+        </p>
     </div>
 
     <section class="panel">
         <div class="payroll-header-row">
             <div>
                 {% if payroll_run.status == 'approved' %}
-                <span class="status status-approved">Approved</span>
+                    <span class="status status-approved">Approved</span>
                 {% else %}
-                <span class="status status-waiting">Pending Super Admin Approval</span>
+                    <span class="status status-waiting">
+                        Pending Super Admin Approval
+                    </span>
                 {% endif %}
             </div>
 
-            {% if profile.role == 'super_admin' and payroll_run.status != 'approved' %}
-            <form method="POST" action="{{ url_for('approve_payroll', run_id=payroll_run.id) }}"
-                  onsubmit="return confirm('Approve this payroll run?');">
-                <button class="btn btn-success" type="submit">✓ Authorize & Approve Payroll</button>
-            </form>
-            {% endif %}
+            <div class="payroll-actions">
+                {% if payroll_run.status == 'approved' and profile.role in ['super_admin', 'hr'] %}
+                    <a class="btn btn-primary"
+                       href="{{ url_for('download_payroll_payslips', run_id=payroll_run.id) }}">
+                        Download All Payslips (ZIP)
+                    </a>
+                {% endif %}
+
+                {% if profile.role == 'super_admin' and payroll_run.status != 'approved' %}
+                    <form method="POST"
+                          action="{{ url_for('approve_payroll', run_id=payroll_run.id) }}"
+                          onsubmit="return confirm('Approve this payroll run?');">
+                        <button class="btn btn-success" type="submit">
+                            ✓ Authorize &amp; Approve Payroll
+                        </button>
+                    </form>
+                {% endif %}
+            </div>
         </div>
 
         {% if items %}
-        <div class="table-wrap">
-            <table class="data-table">
-                <thead><tr><th>Employee</th><th>Gross Pay</th><th>Deductions</th><th>Net Pay</th></tr></thead>
-                <tbody>
-                {% for item in items %}
-                <tr>
-                    <td>{% if item.employees %}{{ item.employees.full_name }}{% else %}{{ item.employee_id }}{% endif %}</td>
-                    <td>{{ "%.2f"|format(item.gross_pay or 0) }}</td>
-                    <td>{{ "%.2f"|format(item.total_deductions or 0) }}</td>
-                    <td><b>{{ "%.2f"|format(item.net_pay or 0) }}</b></td>
-                </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Employee</th>
+                            <th>Gross Pay</th>
+                            <th>Withholding Tax</th>
+                            <th>Total Deductions</th>
+                            <th>Net Pay</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                            <tr>
+                                <td>
+                                    {% if item.employees %}
+                                        {{ item.employees.full_name }}
+                                    {% else %}
+                                        {{ item.employee_id }}
+                                    {% endif %}
+                                </td>
+                                <td>{{ "{:,.2f}".format(item.gross_pay or 0) }}</td>
+                                <td>{{ "{:,.2f}".format(item.withholding_tax or 0) }}</td>
+                                <td>{{ "{:,.2f}".format(item.total_deductions or 0) }}</td>
+                                <td><strong>{{ "{:,.2f}".format(item.net_pay or 0) }}</strong></td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         {% else %}
-        <div class="empty-state">This payroll run has no items.</div>
+            <div class="empty-state">This payroll run has no items.</div>
+        {% endif %}
+
+        {% if payroll_run.status == 'approved' %}
+            <p class="muted" style="margin-top: 1rem;">
+                Payroll has been approved. Payslips are generated from the saved
+                payroll amounts and tax deductions; this download does not
+                recalculate payroll.
+            </p>
+        {% else %}
+            <p class="muted" style="margin-top: 1rem;">
+                Payslips become downloadable after Super Admin approval.
+            </p>
         {% endif %}
     </section>
 </div>
